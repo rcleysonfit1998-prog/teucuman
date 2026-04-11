@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><title>XDomain</title></head>
+<body>
+<script>
+function notifyReady() {
+  var t = window.opener || window.parent;
+  if (t) t.postMessage(JSON.stringify({ type: 'ready' }), '*');
+}
+window.addEventListener('message', function(evt) {
+  var req;
+  try { req = typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data; } catch(e) { return; }
+  if (!req || !req.url) return;
+  var xhr = new XMLHttpRequest();
+  xhr.open(req.method || 'POST', req.url, true);
+  if (req.contentType) try { xhr.setRequestHeader('Content-Type', req.contentType); } catch(e) {}
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState === 4) {
+      var r = JSON.stringify({ id: req.id, readyState: 4, status: xhr.status, responseText: xhr.responseText });
+      try { evt.source.postMessage(r, evt.origin === 'null' ? '*' : evt.origin); } catch(e) {
+        try { evt.source.postMessage(r, '*'); } catch(e2) {}
+      }
+    }
+  };
+  xhr.send(req.postData || null);
+}, false);
+if (document.readyState === 'complete') notifyReady();
+else window.addEventListener('load', notifyReady);
+</script>
+</body>
+</html>
