@@ -427,7 +427,7 @@ var globalTracking = {
   GetTimerValue:    function() { return 0; }
 };
 window.onbeforeunload = function() { return; };
-// ── Fix: ParseConfigFile crashes when configFile=false ───────────────────────
+// ── Fix: ParseConfigFile crashes when configFile=false ──────────────────────
 (function() {
   var _i = setInterval(function() {
     if (typeof ServerInterface === 'undefined' || !ServerInterface.prototype) return;
