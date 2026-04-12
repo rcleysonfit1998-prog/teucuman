@@ -1,7 +1,7 @@
 {
-  "name": "pragmatic-server",
+  "name": "pragmatic-pub",
   "version": "1.0.0",
-  "description": "Pragmatic Play local slot server",
+  "description": "Lucky's Wild Pub 2 — local server",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",

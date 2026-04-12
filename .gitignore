@@ -1,12 +1,4 @@
-# Environment
 .env
-
-# Dependencies
 node_modules/
-
-# HAR files (sensitive)
 *.har
-
-# OS
 .DS_Store
-Thumbs.db

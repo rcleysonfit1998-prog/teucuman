@@ -1,91 +1,110 @@
 'use strict';
-
 require('dotenv').config();
 
 const express = require('express');
 const path    = require('path');
-
-const requestLogger  = require('./middlewares/requestLogger');
-const gameRoutes     = require('./routes/gameRoutes');
-const systemRoutes   = require('./routes/systemRoutes');
-const { initResponseCache, GAMES } = require('./config/games');
-const { pool }       = require('./config/db');
+const qs      = require('querystring');
+const session = require('./models/sessionModel');
+const pubGame = require('./engines/pub');
+const logger  = require('./middlewares/requestLogger');
+const { fmt } = require('./engines/responseBuilder');
+const { pool } = require('./config/db');
 
 const app  = express();
 const PORT = parseInt(process.env.PORT || '3000');
 
-// ── Middleware stack ──────────────────────────────────────────────────────────
-app.use(requestLogger);
+// ── Middleware ────────────────────────────────────────────────────────────────
+app.use(logger);
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.text({ limit: '10mb' }));
 
-// ── CORS (game runs same-origin, but XDomain popup needs this) ────────────────
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (_req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
 
-// ── Static assets (public/) ───────────────────────────────────────────────────
-// Strips ?key=... query strings so Express finds files correctly
+// ── Strip ?key=... for static files ──────────────────────────────────────────
 app.use((req, _res, next) => {
-  req.url = req.url.split('?')[0] || req.url;
-  // Restore query for routes that need it (game5Html, reloadBalance, etc.)
-  // Express req.query already parsed; this only affects static middleware path
+  if (req.path.includes('game5Html') || req.path.includes('html5Game') ||
+      req.path.includes('reloadBalance') || req.path.includes('gameService')) {
+    return next();
+  }
+  req.url = req.url.split('?')[0];
   next();
-}, express.static(path.join(__dirname, '../public'), {
-  maxAge:    0,
-  etag:      false,
-  lastModified: false,
-  setHeaders: (res, filePath) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-  },
-}));
-
-// ── Application routes ────────────────────────────────────────────────────────
-app.use('/gs2c', gameRoutes);
-app.use('/',     systemRoutes);
-
-// ── 404 fallback ──────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  console.warn(`[404] ${req.method} ${req.originalUrl}`);
-  res.status(404).type('text/plain').send(`Not Found: ${req.originalUrl}`);
 });
 
-// ── Global error handler ──────────────────────────────────────────────────────
-app.use((err, _req, res, _next) => {
-  console.error('[ERROR]', err.message, err.stack);
-  res.status(500).type('text/plain').send('Internal Server Error');
+app.use(express.static(path.join(__dirname, '../public'), {
+  maxAge: 0, etag: false,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
+}));
+
+// ── html5Game.do ──────────────────────────────────────────────────────────────
+app.get('/gs2c/html5Game.do', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../games/pub/html5Game.html'));
+});
+
+// gameService (v5)
+app.post(['/gs2c/ge/v5/gameService', '/gs2c/gameService'], async (req, res) => {
+  try {
+    const params   = req.body;
+    const action   = params.action || '';
+    const response = await pubGame.handle(action, params);
+    res.status(200).type('text/plain').set('Cache-Control', 'no-store').send(response);
+  } catch (err) {
+    console.error('[gameService]', err.message);
+    res.status(500).type('text/plain').send('error=1');
+  }
+});
+
+// reloadBalance.do
+app.get('/gs2c/reloadBalance.do', async (req, res) => {
+  const balance = await session.getBalance(req.query.mgckey || 'default');
+  res.type('text/plain').send(
+    `balance_bonus=0.00&balance=${fmt(balance)}&balance_cash=${fmt(balance)}&stime=${Date.now()}`
+  );
+});
+
+// saveSettings.do
+app.post('/gs2c/saveSettings.do', (_req, res) => res.json({ error: 0 }));
+
+// Telemetry stubs
+app.all('/collect',     (_req, res) => res.status(204).end());
+app.all('/j/collect',   (_req, res) => res.status(204).end());
+app.all('/apps/*',      (_req, res) => res.status(200).send(''));
+
+// All other stubs
+const STUBS = ['/gs2c/stats', '/gs2c/clientLog', '/gs2c/jackpot', '/gs2c/regulation',
+               '/gs2c/logout', '/gs2c/closeGame', '/gs2c/announcements', '/gs2c/promo'];
+app.all('*', (req, res, next) => {
+  if (STUBS.some(s => req.path.startsWith(s)) ||
+      req.path.includes('customizations.info') ||
+      req.path.includes('project_settings')) {
+    return res.status(200).send('');
+  }
+  next();
+});
+
+// 404
+app.use((req, res) => {
+  console.warn(`[404] ${req.method} ${req.originalUrl}`);
+  res.status(404).send(`Not Found: ${req.originalUrl}`);
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function start() {
-  // 1. Verify DB connection
   try {
     await pool.query('SELECT 1');
     console.log('[DB] Connected ✓');
   } catch (err) {
     console.error('[DB] Connection failed:', err.message);
-    console.error('  → Run: createdb pragmatic && node src/config/migrate.js');
     process.exit(1);
   }
 
-  // 2. Load HAR responses into memory
-  initResponseCache();
-
-  // 3. Start HTTP server
   app.listen(PORT, () => {
-    console.log(`\n  Pragmatic Server → http://localhost:${PORT}\n`);
-    Object.values(GAMES).forEach(g => {
-      const ready = true; // TODO: check if responses loaded
-      console.log(`  ${ready ? '✓' : '✗'} ${g.name.padEnd(35)} /gs2c/game5Html.html?slug=${g.slug}`);
-    });
-    console.log('');
+    console.log(`\n  Lucky's Wild Pub 2 → http://localhost:${PORT}/gs2c/html5Game.do\n`);
   });
 }
 
