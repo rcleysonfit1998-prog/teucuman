@@ -472,6 +472,27 @@ window.onbeforeunload = function() { return; };
     };
   }, 10);
 })();
+
+// ── Fix: SoundVolume NaN — XT.GetFloat antes de XTInitVariablesAndEvents ─────
+// SoundLoader.CheckLoadComplete chama createjs.Sound.setVolume(XT.GetFloat(Vars.SoundVolume))
+// antes de XTInitVariablesAndEvents inicializar SoundVolume=1, resultando em NaN.
+// Interceptamos XT.GetFloat para retornar 0.5 quando SoundVolume não estiver definido.
+(function() {
+  var _i = setInterval(function() {
+    if (typeof XT === 'undefined' || typeof XT.GetFloat !== 'function') return;
+    clearInterval(_i);
+    var _orig = XT.GetFloat;
+    XT.GetFloat = function(key) {
+      var val = _orig.apply(this, arguments);
+      if ((val === null || val === undefined || isNaN(val) || !isFinite(val)) &&
+          key && key.toString().indexOf('SoundVolume') >= 0) {
+        return 0.5;
+      }
+      return val;
+    };
+    console.log('[patch] XT.GetFloat guarded for SoundVolume NaN');
+  }, 10);
+})();
 </script>
 </body>
 </html>
