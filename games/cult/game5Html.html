@@ -417,7 +417,7 @@ a.src=g;s.body.appendChild(a);
 }
 }, 1);
 
-// ── Local stubs (injected by extract-har.js) ────────────────────────────────
+// ── Local stubs (injected by extract-har.js) ──────────────────────────────────
 window.ga   = function() {};
 window.gtag = function() {};
 function SendTrackingIfQueued() {}
@@ -428,30 +428,6 @@ var globalTracking = {
   GetTimerValue:    function() { return 0; }
 };
 window.onbeforeunload = function() { return; };
-// ── Fix: ParseConfigFile crashes when configFile=false ───────────────────────
-(function() {
-  var _i = setInterval(function() {
-    if (typeof ServerInterface === 'undefined' || !ServerInterface.prototype) return;
-    clearInterval(_i);
-    var _orig = ServerInterface.prototype.ParseConfigFile;
-    ServerInterface.prototype.ParseConfigFile = function() {
-      if (!this.configFile || !this.configFile.text) {
-        try {
-          ServerOptions.isOnline = (typeof UHT_ONLINE !== 'undefined') ? UHT_ONLINE : true;
-          ServerOptions.isArcadeGame = this.isArcadeGame;
-          if (typeof UHT_GAME_CONFIG_SRC !== 'undefined' && UHT_GAME_CONFIG_SRC['replayMode'] === true) {
-            ServerOptions.isOnline = false; ServerOptions.isReplay = true;
-          }
-        } catch(e) {}
-        return;
-      }
-      try { _orig.call(this); } catch(e) {
-        ServerOptions.isOnline = (typeof UHT_ONLINE !== 'undefined') ? UHT_ONLINE : true;
-        ServerOptions.isArcadeGame = this.isArcadeGame;
-      }
-    };
-  }, 10);
-})();
 
 // Redirect any remaining external XHR to localhost
 (function() {
@@ -469,48 +445,6 @@ window.onbeforeunload = function() { return; };
     } else { setTimeout(patchXDomain, 50); }
   }
   patchXDomain();
-})();
-
-// ── Fix: ParseConfigFile — configFile is false in demo mode ──────────────────
-(function() {
-  var _i = setInterval(function() {
-    if (typeof ServerInterface === 'undefined' || !ServerInterface.prototype) return;
-    clearInterval(_i);
-    var _orig = ServerInterface.prototype.ParseConfigFile;
-    ServerInterface.prototype.ParseConfigFile = function() {
-      if (!this.configFile || !this.configFile.text) {
-        try {
-          ServerOptions.isOnline     = (typeof UHT_ONLINE !== 'undefined') ? UHT_ONLINE : true;
-          ServerOptions.isArcadeGame = this.isArcadeGame;
-        } catch(e) {}
-        return;
-      }
-      try { _orig.call(this); } catch(e) {
-        ServerOptions.isOnline     = (typeof UHT_ONLINE !== 'undefined') ? UHT_ONLINE : true;
-        ServerOptions.isArcadeGame = this.isArcadeGame;
-      }
-    };
-  }, 10);
-})();
-
-// ── Fix: ParseConfigFile — configFile=false in demo mode ────────────────────
-(function() {
-  var _i = setInterval(function() {
-    if (typeof ServerInterface === 'undefined' || !ServerInterface.prototype) return;
-    clearInterval(_i);
-    var _o = ServerInterface.prototype.ParseConfigFile;
-    ServerInterface.prototype.ParseConfigFile = function() {
-      if (!this.configFile || !this.configFile.text) {
-        try { ServerOptions.isOnline = (typeof UHT_ONLINE !== 'undefined') ? UHT_ONLINE : true;
-              ServerOptions.isArcadeGame = this.isArcadeGame; } catch(e) {}
-        return;
-      }
-      try { _o.call(this); } catch(e) {
-        ServerOptions.isOnline = (typeof UHT_ONLINE !== 'undefined') ? UHT_ONLINE : true;
-        ServerOptions.isArcadeGame = this.isArcadeGame;
-      }
-    };
-  }, 10);
 })();
 </script>
 </body>

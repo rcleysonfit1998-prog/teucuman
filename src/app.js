@@ -39,11 +39,8 @@ app.use((req, _res, next) => {
 }, express.static(path.join(__dirname, '../public'), {
   maxAge:    0,
   etag:      false,
-  lastModified: false,
-  setHeaders: (res, filePath) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-cache');
   },
 }));
 

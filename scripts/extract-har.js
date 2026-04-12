@@ -35,7 +35,7 @@ if (!VALID_SLUGS.includes(slug)) {
 const ROOT   = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 const GAMES  = path.join(ROOT, 'games', slug);
-const LOCAL  = process.env.PUBLIC_URL || 'http://localhost:3000';
+const LOCAL  = 'http://localhost:3000';
 
 console.log(`\n[extract-har] slug=${slug} har=${harPath}\n`);
 
