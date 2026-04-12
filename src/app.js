@@ -74,8 +74,13 @@ app.post('/gs2c/saveSettings.do', (req, res) => {
   const body = req.body;
   const settings = body.settings || '';
 
-  // method=load: return default settings so Volume is always defined
+  // method=load: return defaults
   if (body.method === 'load') {
+    const id = body.id || '';
+    // vsCommon expects JSON
+    if (id === 'vsCommon') {
+      return res.type('json').send(JSON.stringify({ MinimizedNotificationTypes: '', HideMetaNotifications: 'false' }));
+    }
     return res.type('text/plain').send(DEFAULT_SETTINGS);
   }
 
