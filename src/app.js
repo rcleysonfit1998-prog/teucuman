@@ -67,8 +67,21 @@ app.get('/gs2c/reloadBalance.do', async (req, res) => {
   );
 });
 
-// saveSettings.do
-app.post('/gs2c/saveSettings.do', (_req, res) => res.json({ error: 0 }));
+// saveSettings.do — mirror body back (game reads Volume and settings from response)
+app.post('/gs2c/saveSettings.do', (req, res) => {
+  const body = req.body;
+  // method=load: return empty (no saved settings yet)
+  if (body.method === 'load') return res.status(200).send('');
+  // settings save: echo back the settings string or JSON
+  const settings = body.settings || '';
+  if (!settings) return res.status(200).send('');
+  // If JSON (vsCommon), echo as JSON
+  if (settings.trim().startsWith('{')) {
+    try { return res.type('json').send(settings); } catch(e) {}
+  }
+  // Otherwise echo as plain text (game settings string)
+  res.type('text/plain').send(settings);
+});
 
 // Telemetry stubs
 app.all('/collect',     (_req, res) => res.status(204).end());
