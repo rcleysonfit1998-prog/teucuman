@@ -1,6 +1,6 @@
+# Pragmatic Play Local Server
 
-
-Node.js + Express + PostgreSQL server.
+Node.js + Express + PostgreSQL server for local Pragmatic Play slot games.
 
 ## Setup local
 
