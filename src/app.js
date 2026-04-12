@@ -68,18 +68,25 @@ app.get('/gs2c/reloadBalance.do', async (req, res) => {
 });
 
 // saveSettings.do — mirror body back (game reads Volume and settings from response)
+const DEFAULT_SETTINGS = 'SoundState=true_true_true_false_false;FastPlay=false;Intro=true;StopMsg=0;TurboSpinMsg=0;BetInfo=0_-1;BatterySaver=false;ShowCCH=false;ShowFPH=false;CustomGameStoredData=;Coins=false;Volume=0.5;GameSpeed=0;HapticFeedback=false';
+
 app.post('/gs2c/saveSettings.do', (req, res) => {
   const body = req.body;
-  // method=load: return empty (no saved settings yet)
-  if (body.method === 'load') return res.status(200).send('');
-  // settings save: echo back the settings string or JSON
   const settings = body.settings || '';
-  if (!settings) return res.status(200).send('');
-  // If JSON (vsCommon), echo as JSON
+
+  // method=load: return default settings so Volume is always defined
+  if (body.method === 'load') {
+    return res.type('text/plain').send(DEFAULT_SETTINGS);
+  }
+
+  if (!settings) return res.type('text/plain').send(DEFAULT_SETTINGS);
+
+  // vsCommon: JSON settings — echo back
   if (settings.trim().startsWith('{')) {
     try { return res.type('json').send(settings); } catch(e) {}
   }
-  // Otherwise echo as plain text (game settings string)
+
+  // Game settings string — echo back
   res.type('text/plain').send(settings);
 });
 
