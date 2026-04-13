@@ -2,11 +2,10 @@
 const db  = require('../config/db');
 const rng = require('./rng');
 
-const { doInitRNG, doCollectRNG, fmt, serialize, SCATTER_SYM, FS_COUNT, FS_TRIGGER_COUNT } = rng;
+const { doInitRNG, doCollectRNG, fmt, serialize, SCATTER_SYM, FS_COUNT } = rng;
 
 const DEFAULT_BALANCE = parseFloat(process.env.DEFAULT_BALANCE || '50000');
 
-// ── In-memory session state ───────────────────────────────────────────────────
 const memState = new Map();
 
 function getState(mgckey) {
@@ -21,7 +20,6 @@ function getState(mgckey) {
       fsCurrentSpin:   0,
       fsMaxSpin:       FS_COUNT,
       fsTotalWin:      0,
-      fsBombMul:       1,
       lastTotalWin:    0,
       pendingResponses:[],
     });
@@ -50,7 +48,6 @@ async function saveBalance(mgckey, balance) {
   } catch (_) {}
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
 async function handle(action, params) {
   const mgckey = params.mgckey || 'default';
   await loadFromDB(mgckey);
@@ -59,54 +56,59 @@ async function handle(action, params) {
   switch (action) {
     case 'doInit':    return handleInit(sess);
     case 'doSpin':    return handleSpin(sess, params);
-    case 'doCollect': return handleCollect(sess);
+    case 'doCollect': return handleCollect(sess, params);
     default:
       return `balance=${fmt(sess.balance)}&balance_cash=${fmt(sess.balance)}&balance_bonus=0.00&na=s&stime=${Date.now()}`;
   }
 }
 
-// ── doInit ────────────────────────────────────────────────────────────────────
 async function handleInit(sess) {
   sess.index = 1;
   return doInitRNG(sess.balance);
 }
 
-// ── doSpin ────────────────────────────────────────────────────────────────────
 async function handleSpin(sess, params) {
-  // Return queued tumble step if pending
+  // 🚨 CORREÇÃO CRÍTICA: Atualizar index e counter da fila para bater com a requisição do cliente
   if (sess.pendingResponses.length > 0) {
-    return sess.pendingResponses.shift();
+    let resp = sess.pendingResponses.shift();
+    const reqIndex = params.index || (sess.index + 1);
+    const reqCounter = params.counter || (reqIndex * 2);
+    sess.index = parseInt(reqIndex);
+    
+    resp = resp.replace(/index=[0-9]+/g, `index=${reqIndex}`);
+    resp = resp.replace(/counter=[0-9]+/g, `counter=${reqCounter}`);
+    resp = resp.replace(/stime=[0-9]+/g, `stime=${Date.now()}`);
+    return resp;
   }
 
   const coinValue = parseFloat(params.c || '0.20');
   const pur       = params.pur !== undefined ? parseInt(params.pur) : -1;
-  sess.index++;
+  sess.index = parseInt(params.index || sess.index + 1);
 
-  // ── Buy feature ──────────────────────────────────────────────────────────
   if (pur === 1 || pur === 0) {
     const isSuperBuy = pur === 1;
-    const cost = isSuperBuy ? coinValue * 400 : coinValue * 80;
-    sess.balance    = Math.max(0, sess.balance - cost);
+    // Custo real: Normal FS = 100x bet (2000 * coinValue), Super FS = 500x bet (10000 * coinValue)
+    const cost = isSuperBuy ? coinValue * 10000 : coinValue * 2000;
+    sess.balance = Math.max(0, sess.balance - cost);
     sess.isFreeSpins = true;
     sess.isSuperFS   = isSuperBuy;
     sess.fsCurrentSpin = 1;
     sess.fsTotalWin  = 0;
-    sess.reelSet     = 0; // FS always uses reel_set 0
+    sess.reelSet     = 0;
     await saveBalance(sess.mgckey, sess.balance);
     return buildAndQueueSpin(sess, params, coinValue, pur);
   }
 
-  // ── Ongoing freespins ─────────────────────────────────────────────────────
   if (sess.isFreeSpins) {
     sess.fsCurrentSpin++;
     if (sess.fsCurrentSpin > sess.fsMaxSpin) {
-      return buildFSEndResponse(sess, coinValue);
+      return buildFSEndResponse(sess, coinValue, params);
     }
     return buildAndQueueSpin(sess, params, coinValue, undefined);
   }
 
-  // ── Normal spin ───────────────────────────────────────────────────────────
-  sess.balance = Math.max(0, sess.balance - coinValue);
+  const cost = coinValue * 20;
+  sess.balance = Math.max(0, sess.balance - cost);
   await saveBalance(sess.mgckey, sess.balance);
   return buildAndQueueSpin(sess, params, coinValue, undefined);
 }
@@ -114,45 +116,26 @@ async function handleSpin(sess, params) {
 function buildAndQueueSpin(sess, params, coinValue, pur) {
   const responses = rng.doSpinRNG({ ...params, pur }, sess);
 
-  // Determine total win from last response
   const lastResp = responses[responses.length - 1];
   const tw = parseFloat(getField(lastResp, 'tw') || '0');
 
   if (sess.isFreeSpins) {
-    sess.fsTotalWin += tw;
+    sess.fsTotalWin = tw; // O tw já vem acumulado do rng.js
   } else {
-    // Credit win if na=s (spin) — collect not needed for normal wins in SB1000
-    const na = getField(lastResp, 'na');
-    if (tw > 0 && na !== 'c') {
+    if (tw > 0) {
       sess.balance += tw;
       saveBalance(sess.mgckey, sess.balance);
-    } else if (tw > 0) {
-      sess.lastTotalWin = tw;
     }
   }
 
-  // Patch balance and FS fields into all responses
-  const patched = responses.map(r => {
-    let p = patchBalance(r, sess.balance);
-    if (sess.isFreeSpins) {
-      p = ensureField(p, 'fs',        sess.fsCurrentSpin);
-      p = ensureField(p, 'fsmax',     FS_COUNT);
-      p = ensureField(p, 'fs_bought', FS_COUNT);
-      p = ensureField(p, 'fswin',     sess.fsTotalWin.toFixed(2));
-      p = ensureField(p, 'fsmul',     sess.fsBombMul || 1);
-      p = ensureField(p, 'fsres',     '0');
-      p = ensureField(p, 'puri',      sess.isSuperFS ? '1' : '0');
-      p = ensureField(p, 'purtr',     '1');
-    }
-    return p;
-  });
+  const patched = responses.map(r => patchBalance(r, sess.balance));
 
   const first = patched.shift();
   if (patched.length) sess.pendingResponses.push(...patched);
   return first;
 }
 
-function buildFSEndResponse(sess, coinValue) {
+function buildFSEndResponse(sess, coinValue, params) {
   const syms = [3,4,5,6,7,8,9,10,11];
   const grid = Array.from({length:30}, () => syms[Math.floor(Math.random()*syms.length)]);
   const tw   = sess.fsTotalWin;
@@ -160,11 +143,11 @@ function buildFSEndResponse(sess, coinValue) {
   const resp = serialize({
     tw:            tw.toFixed(2),
     balance:       fmt(sess.balance),
-    index:         sess.index,
+    index:         params.index,
     balance_cash:  fmt(sess.balance),
     reel_set:      sess.reelSet,
     balance_bonus: '0.00',
-    na:            'c',
+    na:            'c', // 🚨 ÚNICO LUGAR ONDE na=c É ENVIADO
     tmb_win:       '0',
     bl:            '0',
     stime:         Date.now(),
@@ -173,24 +156,23 @@ function buildFSEndResponse(sess, coinValue) {
     sh:            5,
     c:             coinValue.toFixed(2),
     sver:          '5',
-    counter:       sess.index * 2,
+    counter:       params.counter,
     l:             '20',
     s:             grid.join(','),
     w:             '0',
     'fs_bought':   FS_COUNT,
-    fs:            sess.fsCurrentSpin,
+    fs:            sess.fsCurrentSpin, // 11
     st:            'rect',
     sw:            6,
-    fsmul:         sess.fsBombMul || 1,
+    fsmul:         '1',
     fsmul_total:   '1',
-    fswin_total:   tw.toFixed(2),
+    fswin_total:   '0.00', // 🚨 fswin é sempre 0 no SB1000
     fs_total:      FS_COUNT,
     fsres_total:   '0.00',
     puri:          sess.isSuperFS ? '1' : '0',
   });
 
   sess.lastTotalWin = tw;
-  // Reset FS state
   sess.isFreeSpins   = false;
   sess.isSuperFS     = false;
   sess.fsCurrentSpin = 0;
@@ -199,16 +181,15 @@ function buildFSEndResponse(sess, coinValue) {
   return resp;
 }
 
-// ── doCollect ─────────────────────────────────────────────────────────────────
-async function handleCollect(sess) {
+async function handleCollect(sess, params) {
   const win = sess.lastTotalWin || 0;
   sess.balance += win;
   sess.lastTotalWin = 0;
+  sess.index = parseInt(params.index || sess.index + 1);
   await saveBalance(sess.mgckey, sess.balance);
-  return doCollectRNG(sess.balance, sess.index, win);
+  return doCollectRNG(sess.balance, sess.index);
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function getField(str, field) {
   const m = str.match(new RegExp(`(?:^|&)${field}=([^&]*)`));
   return m ? m[1] : null;
@@ -218,11 +199,6 @@ function patchBalance(str, balance) {
   return str
     .replace(/balance=[^&]*/g,      `balance=${fmt(balance)}`)
     .replace(/balance_cash=[^&]*/g, `balance_cash=${fmt(balance)}`);
-}
-
-function ensureField(str, field, value) {
-  if (str.includes(`${field}=`)) return str;
-  return `${str}&${field}=${value}`;
 }
 
 function randRow() {
