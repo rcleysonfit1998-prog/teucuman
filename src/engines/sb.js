@@ -91,7 +91,7 @@ async function handleSpin(sess, params) {
     sess.isSuperFS   = isSuperBuy;
     sess.fsCurrentSpin = 1;
     sess.fsTotalWin  = 0;
-    sess.reelSet     = isSuperBuy ? 1 : 0;
+    sess.reelSet     = 0; // FS always uses reel_set 0
     await saveBalance(sess.mgckey, sess.balance);
     return buildAndQueueSpin(sess, params, coinValue, pur);
   }

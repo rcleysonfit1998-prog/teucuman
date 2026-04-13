@@ -267,43 +267,44 @@ function doSpinRNG(params, sess) {
   let activeBombs    = [];
   let cascadeStep    = 0;
 
-  // ── Tumbling loop ────────────────────────────────────────────────────────
+  // ── Tumbling loop ─────────────────────────────────────────────────────────
+  // Pattern (from real responses):
+  //   zero-win:  1 response, no rs/rs_t, tw=0
+  //   any win:   N×(rs=t + tmb) steps, then 1×(rs_t=1, w=0, na=c) step
+  //   Every winning spin has at least 2 responses.
+
   while (true) {
     const clusters = findClusters(grid);
     const newBombs = findBombs(grid, isSuper);
-    // Merge new bombs into active (avoid duplicates by position)
     for (const b of newBombs) {
       if (!activeBombs.find(ab => ab.pos === b.pos)) activeBombs.push(b);
     }
 
     if (clusters.length === 0) {
-      // No win this step
       if (cascadeStep === 0) {
-        // Zero-win spin
+        // Zero-win: single response, no rs/rs_t
         return [buildBaseResponse(grid, 0, 0, coinValue, index, counter, sess, pur, [], '')];
       }
-      // End of cascade — final response with rs_t=1
-      responses.push(buildCascadeEndResponse(grid, totalWin, tmbWin, coinValue, index, counter, sess, activeBombs, pur));
+      // End of cascade: rs_t=1 finalizer
+      responses.push(buildCascadeEndResponse(grid, totalWin, totalWin, coinValue, index, counter, sess, activeBombs, pur));
       break;
     }
 
     const bombMulSum = activeBombs.reduce((acc, b) => acc + b.mul, 0) || 1;
     const stepWin    = clusterWin(clusters, coinValue, bombMulSum);
     totalWin        += stepWin;
-    if (cascadeStep > 0) tmbWin += stepWin;
+    tmbWin          += stepWin; // all steps contribute to tmb_win
 
     const tmb      = buildTmb(clusters, newBombs);
     const rmul     = buildRmul(activeBombs);
     const winLines = buildWinLines(clusters, coinValue, bombMulSum);
-    const trail    = activeBombs.length
-      ? `nmwin~${tmbWin > 0 ? tmbWin.toFixed(2) : stepWin.toFixed(2)}${bombMulSum > 1 ? `;totmul~${bombMulSum}` : ''}`
-      : '';
+    const trail    = `nmwin~${totalWin.toFixed(2)}${bombMulSum > 1 ? `;totmul~${bombMulSum}` : ''}`;
 
-    // Apply tumble for next iteration
+    // Apply tumble for next step
     const nextGrid = applyTumble(grid, clusters, newBombs, reelSetIdx);
     cascadeStep++;
 
-    // Build cascade step response
+    // rs=t step with tmb (the animated step)
     responses.push(buildCascadeStepResponse({
       prevGrid: grid, nextGrid, tmb, rmul, trail, winLines,
       totalWin, stepWin, tmbWin, coinValue, index, counter,
@@ -401,6 +402,7 @@ function buildCascadeStepResponse({ prevGrid, nextGrid, tmb, rmul, trail, winLin
 }
 
 function buildCascadeEndResponse(grid, totalWin, tmbWin, coinValue, index, counter, sess, activeBombs, pur) {
+  // rs_t=1: the finalizer step — na=c, w=0, trail=nmwin~total
   const obj = {
     tw:            totalWin.toFixed(2),
     balance:       fmt(sess.balance),
@@ -408,9 +410,9 @@ function buildCascadeEndResponse(grid, totalWin, tmbWin, coinValue, index, count
     balance_cash:  fmt(sess.balance),
     reel_set:      sess.reelSet || 0,
     balance_bonus: '0.00',
-    na:            totalWin > 0 ? 's' : 's',
+    na:            'c',
     rs_t:          '1',
-    tmb_win:       tmbWin.toFixed(2),
+    tmb_win:       totalWin.toFixed(2),
     bl:            '0',
     stime:         Date.now(),
     sa:            randRow(),
@@ -422,16 +424,16 @@ function buildCascadeEndResponse(grid, totalWin, tmbWin, coinValue, index, count
     l:             '20',
     s:             grid.join(','),
     w:             '0',
+    trail:         `nmwin~${totalWin.toFixed(2)}`,
     st:            'rect',
     sw:            COLS,
-    ntp:           `-${totalWin.toFixed(2)}`,
   };
 
   if (activeBombs.length) {
     obj.rmul = buildRmul(activeBombs);
     const totalMul = activeBombs.reduce((a, b) => a + b.mul, 0);
-    obj.trail    = `nmwin~${tmbWin.toFixed(2)};totmul~${totalMul}`;
-    obj.tmb_res  = (totalWin - tmbWin).toFixed(2);
+    obj.trail    = `nmwin~${totalWin.toFixed(2)};totmul~${totalMul}`;
+    obj.tmb_res  = totalWin.toFixed(2);
   }
 
   if (sess.isFreeSpins) addFSFields(obj, sess);
