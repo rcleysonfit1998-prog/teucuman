@@ -3,20 +3,17 @@ require('dotenv').config();
 
 const express = require('express');
 const path    = require('path');
-const qs      = require('querystring');
 const session = require('./models/sessionModel');
-const pubGame = require('./engines/pub');
-const logger  = require('./middlewares/requestLogger');
-const { fmt } = require('./engines/responseBuilder');
+const sbGame  = require('./engines/sb');
 const { pool } = require('./config/db');
 
 const app  = express();
 const PORT = parseInt(process.env.PORT || '3000');
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-app.use(logger);
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
+app.use(express.text({ limit: '10mb' }));
 
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
@@ -26,93 +23,109 @@ app.use((_req, res, next) => {
   next();
 });
 
-// ── Strip ?key=... for static files ──────────────────────────────────────────
-app.use((req, _res, next) => {
-  if (req.path.includes('game5Html') || req.path.includes('html5Game') ||
-      req.path.includes('reloadBalance') || req.path.includes('gameService')) {
-    return next();
-  }
-  req.url = req.url.split('?')[0];
+// ── Logging ───────────────────────────────────────────────────────────────────
+const MUTED = ['/collect', '/stats', '/favicon', '/rum'];
+app.use((req, res, next) => {
+  if (MUTED.some(p => req.path.includes(p))) return next();
+  const start = Date.now();
+  res.on('finish', () => {
+    const c = res.statusCode >= 400 ? '\x1b[31m' : '\x1b[32m';
+    console.log(`${c}${req.method}\x1b[0m ${req.path} → ${res.statusCode} (${Date.now()-start}ms)`);
+  });
   next();
 });
 
-app.use(express.static(path.join(__dirname, '../public'), {
-  maxAge: 0, etag: false,
-  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
-}));
-
-// ── html5Game.do ──────────────────────────────────────────────────────────────
-app.get('/gs2c/html5Game.do', (_req, res) => {
-  res.sendFile(path.join(__dirname, '../games/pub/html5Game.html'));
+// ── Strip ?key=... for static files ──────────────────────────────────────────
+app.use((req, _res, next) => {
+  const keep = ['gameService', 'reloadBalance', 'saveSettings', 'html5Game'];
+  if (!keep.some(k => req.path.includes(k))) {
+    req.url = req.url.split('?')[0];
+  }
+  next();
 });
 
-// gameService (v5)
-app.post(['/gs2c/ge/v5/gameService', '/gs2c/gameService'], async (req, res) => {
+// ── Static assets — nusewin serves assets under /gs2c/ ───────────────────────
+app.use('/gs2c', express.static(path.join(__dirname, '../public/gs2c'), {
+  maxAge: 0, etag: false,
+  setHeaders: res => res.setHeader('Cache-Control', 'no-store'),
+}));
+
+// ── html5Game.html ────────────────────────────────────────────────────────────
+app.get('/gs2c/html5Game.html', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../games/sb/html5Game.html'));
+});
+
+// ── gameService — nusewin uses /api/slots/gs2c_/gameService ──────────────────
+app.post('/api/slots/gs2c_/gameService', async (req, res) => {
   try {
     const params   = req.body;
     const action   = params.action || '';
-    const response = await pubGame.handle(action, params);
-    res.status(200).type('text/plain').set('Cache-Control', 'no-store').send(response);
+    const response = await sbGame.handle(action, params);
+    res.status(200).type('text/plain').set('Cache-Control','no-store').send(response);
   } catch (err) {
     console.error('[gameService]', err.message);
     res.status(500).type('text/plain').send('error=1');
   }
 });
 
-// reloadBalance.do
-app.get('/gs2c/reloadBalance.do', async (req, res) => {
-  const balance = await session.getBalance(req.query.mgckey || 'default');
-  res.type('text/plain').send(
-    `balance_bonus=0.00&balance=${fmt(balance)}&balance_cash=${fmt(balance)}&stime=${Date.now()}`
-  );
+// ── API stubs — nusewin uses /api/slots/gs2c/ ─────────────────────────────────
+function fmt(n) {
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+app.get('/api/slots/gs2c/reloadBalance.do', async (req, res) => {
+  try {
+    const mgckey  = req.query.mgckey || 'default';
+    const balance = await session.getBalance(mgckey);
+    res.type('text/plain').send(
+      `balance_bonus=0.00&balance=${fmt(balance)}&balance_cash=${fmt(balance)}&stime=${Date.now()}`
+    );
+  } catch (err) {
+    res.status(500).send('error=1');
+  }
 });
 
-// saveSettings.do — mirror body back (game reads Volume and settings from response)
 const DEFAULT_SETTINGS = 'SoundState=true_true_true_false_false;FastPlay=false;Intro=true;StopMsg=0;TurboSpinMsg=0;BetInfo=0_-1;BatterySaver=false;ShowCCH=false;ShowFPH=false;CustomGameStoredData=;Coins=false;Volume=0.5;GameSpeed=0;HapticFeedback=false';
 
-app.post('/gs2c/saveSettings.do', (req, res) => {
-  const body = req.body;
+app.post('/api/slots/gs2c/saveSettings.do', (req, res) => {
+  const body     = req.body;
   const settings = body.settings || '';
-
-  // method=load: return defaults
   if (body.method === 'load') {
     const id = body.id || '';
-    // vsCommon expects JSON
-    if (id === 'vsCommon') {
-      return res.type('json').send(JSON.stringify({ MinimizedNotificationTypes: '', HideMetaNotifications: 'false' }));
-    }
+    if (id === 'vsCommon') return res.type('json').send(JSON.stringify({ MinimizedNotificationTypes: '', HideMetaNotifications: 'false' }));
     return res.type('text/plain').send(DEFAULT_SETTINGS);
   }
-
   if (!settings) return res.type('text/plain').send(DEFAULT_SETTINGS);
-
-  // vsCommon: JSON settings — echo back
   if (settings.trim().startsWith('{')) {
     try { return res.type('json').send(settings); } catch(e) {}
   }
-
-  // Game settings string — echo back
   res.type('text/plain').send(settings);
 });
 
-// Telemetry stubs
-app.all('/collect',     (_req, res) => res.status(204).end());
-app.all('/j/collect',   (_req, res) => res.status(204).end());
-app.all('/apps/*',      (_req, res) => res.status(200).send(''));
+// ── Remaining stubs ───────────────────────────────────────────────────────────
+const stub = (_req, res) => res.status(200).send('');
+app.all('/api/slots/gs2c/stats.do',      stub);
+app.all('/api/slots/gs2c/clientLog.do',  stub);
+app.all('/gs2c/jackpot/*',               stub);
+app.all('/gs2c/regulation/*',            stub);
+app.all('/gs2c/logout.do',               stub);
+app.all('/gs2c/closeGame.do',            stub);
+app.all('/gs2c/announcements/*',         stub);
+app.all('/gs2c/promo/*',                 stub);
+app.all('/collect',                      (_req, res) => res.status(204).end());
+app.all('/j/collect',                    (_req, res) => res.status(204).end());
+app.all('/cdn-cgi/*',                    (_req, res) => res.status(204).end());
+app.all('/apps/*',                       stub);
 
-// All other stubs
-const STUBS = ['/gs2c/stats', '/gs2c/clientLog', '/gs2c/jackpot', '/gs2c/regulation',
-               '/gs2c/logout', '/gs2c/closeGame', '/gs2c/announcements', '/gs2c/promo'];
-app.all('*', (req, res, next) => {
-  if (STUBS.some(s => req.path.startsWith(s)) ||
-      req.path.includes('customizations.info') ||
-      req.path.includes('project_settings')) {
-    return res.status(200).send('');
-  }
-  next();
+// ── Lobby index ───────────────────────────────────────────────────────────────
+app.get('/', (_req, res) => {
+  res.send(`<!DOCTYPE html><html><head><title>Sweet Bonanza 1000</title>
+  <style>body{background:#111;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:sans-serif;}
+  a{color:#fff;background:#f59e0b;padding:16px 32px;border-radius:12px;text-decoration:none;font-size:1.2rem;font-weight:bold;}</style>
+  </head><body><a href="/gs2c/html5Game.html">▶ Sweet Bonanza 1000</a></body></html>`);
 });
 
-// 404
+// ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   console.warn(`[404] ${req.method} ${req.originalUrl}`);
   res.status(404).send(`Not Found: ${req.originalUrl}`);
@@ -129,7 +142,7 @@ async function start() {
   }
 
   app.listen(PORT, () => {
-    console.log(`\n  Lucky's Wild Pub 2 → http://localhost:${PORT}/gs2c/html5Game.do\n`);
+    console.log(`\n  Sweet Bonanza 1000 → http://localhost:${PORT}\n`);
   });
 }
 

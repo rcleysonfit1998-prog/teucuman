@@ -1,7 +1,7 @@
 'use strict';
 const db = require('../config/db');
 
-const DEFAULT_BALANCE = parseFloat(process.env.DEFAULT_BALANCE || '100000');
+const DEFAULT_BALANCE = parseFloat(process.env.DEFAULT_BALANCE || '50000');
 
 async function getOrCreate(mgckey) {
   const { rows } = await db.query(
