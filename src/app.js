@@ -3,12 +3,13 @@ require('dotenv').config();
 
 const express = require('express');
 const path    = require('path');
-const session = require('./models/sessionModel');
-const sbGame  = require('./engines/sb');
 const { pool } = require('./config/db');
+const sbGame  = require('./engines/sb');
+const srGame  = require('./engines/sr');
 
 const app  = express();
 const PORT = parseInt(process.env.PORT || '3000');
+const fmt  = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -24,13 +25,13 @@ app.use((_req, res, next) => {
 });
 
 // ── Logging ───────────────────────────────────────────────────────────────────
-const MUTED = ['/collect', '/stats', '/favicon', '/rum'];
+const MUTED = ['/stats', '/favicon', '/rum', '/collect'];
 app.use((req, res, next) => {
   if (MUTED.some(p => req.path.includes(p))) return next();
   const start = Date.now();
   res.on('finish', () => {
     const c = res.statusCode >= 400 ? '\x1b[31m' : '\x1b[32m';
-    console.log(`${c}${req.method}\x1b[0m ${req.path} → ${res.statusCode} (${Date.now()-start}ms)`);
+    console.log(`${c}${req.method}\x1b[0m ${req.path} → ${res.statusCode} (${Date.now() - start}ms)`);
   });
   next();
 });
@@ -38,57 +39,83 @@ app.use((req, res, next) => {
 // ── Strip ?key=... for static files ──────────────────────────────────────────
 app.use((req, _res, next) => {
   const keep = ['gameService', 'reloadBalance', 'saveSettings', 'html5Game'];
-  if (!keep.some(k => req.path.includes(k))) {
-    req.url = req.url.split('?')[0];
-  }
+  if (!keep.some(k => req.path.includes(k))) req.url = req.url.split('?')[0];
   next();
 });
 
-// ── Static assets — nusewin serves assets under /gs2c/ ───────────────────────
-app.use('/gs2c', express.static(path.join(__dirname, '../public/gs2c'), {
+// ── Favicon ───────────────────────────────────────────────────────────────────
+app.get('/favicon.png', (_req, res) => res.sendFile(path.join(__dirname, '../public/favicon.png')));
+app.get('/favicon.ico', (_req, res) => res.sendFile(path.join(__dirname, '../public/favicon.png')));
+
+// ── Static assets ─────────────────────────────────────────────────────────────
+// Both games share the same /gs2c/ static tree (common assets, logo_info.js)
+app.use('/api/slots/SweetBonanza1000/gs2c', express.static(path.join(__dirname, '../public/gs2c'), {
   maxAge: 0, etag: false,
   setHeaders: res => res.setHeader('Cache-Control', 'no-store'),
 }));
 
-// ── html5Game.html ────────────────────────────────────────────────────────────
-app.get('/gs2c/html5Game.html', (_req, res) => {
+// Sugar Rush also served under its own route prefix
+app.use('/api/slots/SugarRush1000/gs2c', express.static(path.join(__dirname, '../public/gs2c'), {
+  maxAge: 0, etag: false,
+}));
+
+// ── ═══════════════════════════ SWEET BONANZA 1000 ═══════════════════════════ ─
+app.get('/api/slots/SweetBonanza1000/gs2c/html5Game.html', (_req, res) => {
   res.sendFile(path.join(__dirname, '../games/sb/html5Game.html'));
 });
 
-// ── gameService — nusewin uses /api/slots/gs2c_/gameService ──────────────────
-app.post('/api/slots/gs2c_/gameService', async (req, res) => {
+app.post('/api/slots/SweetBonanza1000/gs2c_/gameService', async (req, res) => {
   try {
-    const params   = req.body;
-    const action   = params.action || '';
-    const response = await sbGame.handle(action, params);
-    res.status(200).type('text/plain').set('Cache-Control','no-store').send(response);
+    const response = await sbGame.handle(req.body.action || '', req.body);
+    res.status(200).type('text/plain').set('Cache-Control', 'no-store').send(response);
   } catch (err) {
-    console.error('[gameService]', err.message);
+    console.error('[SB gameService]', err.message);
     res.status(500).type('text/plain').send('error=1');
   }
 });
 
-// ── API stubs — nusewin uses /api/slots/gs2c/ ─────────────────────────────────
-function fmt(n) {
-  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-app.get('/api/slots/gs2c/reloadBalance.do', async (req, res) => {
+app.get('/api/slots/SweetBonanza1000/gs2c/reloadBalance.do', async (req, res) => {
   try {
     const mgckey  = req.query.mgckey || 'default';
-    const balance = await session.getBalance(mgckey);
+    const { rows } = await pool.query('SELECT balance FROM sessions WHERE mgckey=$1', [mgckey]);
+    const balance = rows[0] ? parseFloat(rows[0].balance) : parseFloat(process.env.DEFAULT_BALANCE || '50000');
     res.type('text/plain').send(
       `balance_bonus=0.00&balance=${fmt(balance)}&balance_cash=${fmt(balance)}&stime=${Date.now()}`
     );
+  } catch { res.status(500).send('error=1'); }
+});
+
+// ── ════════════════════════════ SUGAR RUSH 1000 ════════════════════════════ ─
+app.get('/api/slots/SugarRush1000/gs2c/html5Game.html', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../games/sr/html5Game.html'));
+});
+
+app.post('/api/slots/SugarRush1000/gs2c_/gameService', async (req, res) => {
+  try {
+    const response = await srGame.handle(req.body.action || '', req.body);
+    res.status(200).type('text/plain').set('Cache-Control', 'no-store').send(response);
   } catch (err) {
-    res.status(500).send('error=1');
+    console.error('[SR gameService]', err.message);
+    res.status(500).type('text/plain').send('error=1');
   }
 });
 
+app.get('/api/slots/SugarRush1000/gs2c/reloadBalance.do', async (req, res) => {
+  try {
+    const mgckey  = req.query.mgckey || 'default';
+    const { rows } = await pool.query('SELECT balance FROM sessions WHERE mgckey=$1', [mgckey]);
+    const balance = rows[0] ? parseFloat(rows[0].balance) : parseFloat(process.env.DEFAULT_BALANCE || '50000');
+    res.type('text/plain').send(
+      `balance_bonus=0.00&balance=${fmt(balance)}&balance_cash=${fmt(balance)}&stime=${Date.now()}`
+    );
+  } catch { res.status(500).send('error=1'); }
+});
+
+// ── Shared saveSettings ───────────────────────────────────────────────────────
 const DEFAULT_SETTINGS = 'SoundState=true_true_true_false_false;FastPlay=false;Intro=true;StopMsg=0;TurboSpinMsg=0;BetInfo=0_-1;BatterySaver=false;ShowCCH=false;ShowFPH=false;CustomGameStoredData=;Coins=false;Volume=0.5;GameSpeed=0;HapticFeedback=false';
 
-app.post('/api/slots/gs2c/saveSettings.do', (req, res) => {
-  const body     = req.body;
+function handleSaveSettings(req, res) {
+  const body = req.body;
   const settings = body.settings || '';
   if (body.method === 'load') {
     const id = body.id || '';
@@ -97,32 +124,57 @@ app.post('/api/slots/gs2c/saveSettings.do', (req, res) => {
   }
   if (!settings) return res.type('text/plain').send(DEFAULT_SETTINGS);
   if (settings.trim().startsWith('{')) {
-    try { return res.type('json').send(settings); } catch(e) {}
+    try { return res.type('json').send(settings); } catch (_) {}
   }
   res.type('text/plain').send(settings);
-});
+}
 
-// ── Remaining stubs ───────────────────────────────────────────────────────────
+app.post('/api/slots/SweetBonanza1000/gs2c/saveSettings.do', handleSaveSettings);
+app.post('/api/slots/SugarRush1000/gs2c/saveSettings.do', handleSaveSettings);
+
+// ── Stubs ─────────────────────────────────────────────────────────────────────
 const stub = (_req, res) => res.status(200).send('');
-app.all('/api/slots/gs2c/stats.do',      stub);
-app.all('/api/slots/gs2c/clientLog.do',  stub);
-app.all('/gs2c/jackpot/*',               stub);
-app.all('/gs2c/regulation/*',            stub);
-app.all('/gs2c/logout.do',               stub);
-app.all('/gs2c/closeGame.do',            stub);
-app.all('/gs2c/announcements/*',         stub);
-app.all('/gs2c/promo/*',                 stub);
-app.all('/collect',                      (_req, res) => res.status(204).end());
-app.all('/j/collect',                    (_req, res) => res.status(204).end());
-app.all('/cdn-cgi/*',                    (_req, res) => res.status(204).end());
-app.all('/apps/*',                       stub);
+const noContent = (_req, res) => res.status(204).end();
 
-// ── Lobby index ───────────────────────────────────────────────────────────────
+app.all('/api/slots/SweetBonanza1000/gs2c/stats.do', stub);
+app.all('/api/slots/SugarRush1000/gs2c/stats.do', stub);
+app.all('/gs2c/jackpot/*',       stub);
+app.all('/gs2c/regulation/*',    stub);
+app.all('/gs2c/logout.do',       stub);
+app.all('/gs2c/closeGame.do',    stub);
+app.all('/gs2c/announcements/*', stub);
+app.all('/gs2c/promo/*',         stub);
+app.all('/collect',              noContent);
+app.all('/j/collect',            noContent);
+app.all('/cdn-cgi/*',            noContent);
+app.all('/apps/*',               stub);
+
+// ── Lobby ─────────────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
-  res.send(`<!DOCTYPE html><html><head><title>Sweet Bonanza 1000</title>
-  <style>body{background:#111;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:sans-serif;}
-  a{color:#fff;background:#f59e0b;padding:16px 32px;border-radius:12px;text-decoration:none;font-size:1.2rem;font-weight:bold;}</style>
-  </head><body><a href="/gs2c/html5Game.html">▶ Sweet Bonanza 1000</a></body></html>`);
+  res.send(`<!DOCTYPE html><html><head><title>Casino</title>
+  <link rel="icon" href="/favicon.png">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#0f0f1a;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:'Segoe UI',sans-serif;gap:24px;}
+    h1{color:#fff;font-size:2rem;letter-spacing:2px;}
+    .games{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;}
+    a{display:flex;flex-direction:column;align-items:center;gap:10px;color:#fff;background:linear-gradient(135deg,#7c3aed,#4f46e5);padding:24px 40px;border-radius:16px;text-decoration:none;font-size:1.1rem;font-weight:bold;transition:transform .2s,box-shadow .2s;box-shadow:0 4px 20px rgba(124,58,237,.4);}
+    a:hover{transform:translateY(-4px);box-shadow:0 8px 30px rgba(124,58,237,.6);}
+    .emoji{font-size:2.5rem;}
+  </style></head>
+  <body>
+    <h1>🎰 Casino</h1>
+    <div class="games">
+      <a href="/api/slots/SweetBonanza1000/gs2c/html5Game.html">
+        <span class="emoji">🍬</span>
+        Sweet Bonanza 1000
+      </a>
+      <a href="/api/slots/SugarRush1000/gs2c/html5Game.html">
+        <span class="emoji">🍭</span>
+        Sugar Rush 1000
+      </a>
+    </div>
+  </body></html>`);
 });
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
@@ -140,9 +192,11 @@ async function start() {
     console.error('[DB] Connection failed:', err.message);
     process.exit(1);
   }
-
   app.listen(PORT, () => {
-    console.log(`\n  Sweet Bonanza 1000 → http://localhost:${PORT}\n`);
+    console.log(`
+  🍬 Sweet Bonanza 1000  → http://localhost:${PORT}/api/slots/SweetBonanza1000/gs2c/html5Game.html
+  🍭 Sugar Rush 1000     → http://localhost:${PORT}/api/slots/SugarRush1000/gs2c/html5Game.html
+  `);
   });
 }
 
