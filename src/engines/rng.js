@@ -1,5 +1,6 @@
 'use strict';
 
+// ── Sweet Bonanza 1000 RNG Engine ─────────────────────────────────────────────
 const REEL_SETS = {
   0: [
     [8,11,6,8,4,3,9,11,5,10,6,10,6,10,10,10,9,11,9,11,10,11,8,7,5,3,7,10,9,5,7,7,7,11,1,4,6,8,4,7,8,10,10,9,10,11,7,10],
@@ -55,6 +56,8 @@ const PAYTABLE_ROWS = {
   11: [0,0,0,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,15,15,5,5,0,0,0,0,0,0,0],
 };
 
+const MIN_CLUSTER = { 3:8, 4:8, 5:8, 6:4, 7:4, 8:4, 9:4, 10:4, 11:4 };
+
 const COLS        = 6;
 const ROWS        = 5;
 const GRID_SIZE   = COLS * ROWS;
@@ -90,30 +93,45 @@ function spinGridWithScatters(reelSetIdx, minScatters) {
   return grid;
 }
 
-// 🚨 CORREÇÃO: Sweet Bonanza é Scatter Pays (paga em qualquer lugar), não Cluster Pays!
-function findWins(grid) {
-  const counts = {};
-  const positions = {};
-  for (let i = 0; i < GRID_SIZE; i++) {
-    const sym = grid[i];
-    if (sym === SCATTER_SYM || sym === BOMB_SYM) continue;
-    counts[sym] = (counts[sym] || 0) + 1;
-    if (!positions[sym]) positions[sym] = [];
-    positions[sym].push(i);
-  }
-
-  const wins = [];
-  for (const sym in counts) {
-    if (counts[sym] >= 8) {
-      wins.push({ sym: parseInt(sym), positions: positions[sym] });
-    }
-  }
-  return wins;
+function getNeighbors(pos) {
+  const col = Math.floor(pos / ROWS);
+  const row = pos % ROWS;
+  const n = [];
+  if (row > 0)        n.push(pos - 1);
+  if (row < ROWS - 1) n.push(pos + 1);
+  if (col > 0)        n.push(pos - ROWS);
+  if (col < COLS - 1) n.push(pos + ROWS);
+  return n;
 }
 
-function applyTumble(grid, wins, bombs, reelSetIdx) {
+function findClusters(grid) {
+  const visited = new Uint8Array(GRID_SIZE);
+  const clusters = [];
+  for (let i = 0; i < GRID_SIZE; i++) {
+    const sym = grid[i];
+    if (visited[i] || sym === SCATTER_SYM || sym === BOMB_SYM || sym === 0) continue;
+    const cluster = [];
+    const queue = [i];
+    visited[i] = 1;
+    while (queue.length) {
+      const pos = queue.shift();
+      cluster.push(pos);
+      for (const nb of getNeighbors(pos)) {
+        if (!visited[nb] && grid[nb] === sym) {
+          visited[nb] = 1;
+          queue.push(nb);
+        }
+      }
+    }
+    const minSize = MIN_CLUSTER[sym] || 4;
+    if (cluster.length >= minSize) clusters.push({ sym, positions: cluster });
+  }
+  return clusters;
+}
+
+function applyTumble(grid, clusters, bombs, reelSetIdx) {
   const toRemove = new Set();
-  for (const w of wins) w.positions.forEach(p => toRemove.add(p));
+  for (const c of clusters) c.positions.forEach(p => toRemove.add(p));
   for (const b of bombs) toRemove.add(b.pos);
 
   const newGrid = grid.slice();
@@ -150,45 +168,43 @@ function findBombs(grid, isSuper) {
   return bombs;
 }
 
-function clusterWin(wins, coinValue) {
+function clusterWin(clusters, coinValue) {
   let win = 0;
-  for (const w of wins) {
-    const row = PAYTABLE_ROWS[w.sym];
+  for (const c of clusters) {
+    const row = PAYTABLE_ROWS[c.sym];
     if (!row) continue;
-    const count = Math.min(w.positions.length, 30);
-    const payIdx = 30 - count; // A lógica correta da paytable
-    const pay = row[payIdx] || 0;
+    const idx = Math.min(c.positions.length, 30) - 1;
+    const pay = row[idx] || 0;
     if (pay > 0) win += pay * coinValue;
   }
   return win;
 }
 
-function buildTmb(wins, bombs) {
+function buildTmb(clusters, bombs) {
   const parts = [];
-  for (const w of wins) for (const p of w.positions) parts.push(`${p},${w.sym}`);
+  for (const c of clusters) for (const p of c.positions) parts.push(`${p},${c.sym}`);
   for (const b of bombs) parts.push(`${b.pos},${BOMB_SYM}`);
   return parts.join('~');
 }
 
-function buildSMark(wins, bombs) {
+function buildSMark(clusters, bombs) {
   const parts = [];
-  for (const w of wins) for (const p of w.positions) parts.push(`${w.sym}:${p}`);
+  for (const c of clusters) for (const p of c.positions) parts.push(`${c.sym}:${p}`);
   for (const b of bombs) parts.push(`${BOMB_SYM}:${b.pos}`);
   if (parts.length === 0) return '';
   return `tmb~${parts.join(',')}`;
 }
 
-function buildWinLines(wins, coinValue) {
+function buildWinLines(clusters, coinValue) {
   const lines = {};
   let idx = 0;
-  for (const w of wins) {
-    const row = PAYTABLE_ROWS[w.sym];
+  for (const c of clusters) {
+    const row = PAYTABLE_ROWS[c.sym];
     if (!row) continue;
-    const count = Math.min(w.positions.length, 30);
-    const payIdx = 30 - count;
+    const payIdx = Math.min(c.positions.length, 30) - 1;
     const pay = (row[payIdx] || 0) * coinValue;
     if (pay > 0) {
-      lines[`l${idx}`] = `0~${pay.toFixed(2)}~${w.positions.join('~')}`;
+      lines[`l${idx}`] = `0~${pay.toFixed(2)}~${c.positions.join('~')}`;
       idx++;
     }
   }
@@ -216,15 +232,14 @@ function randRow() {
   return Array.from({ length: COLS }, () => syms[rnd(syms.length)]).join(',');
 }
 
-function addFSFields(obj, sess, fsMore) {
+function addFSFields(obj, sess) {
   obj.fs         = sess.fsCurrentSpin;
-  obj.fsmax      = sess.fsMaxSpin;
+  obj.fsmax      = FS_COUNT;
   obj['fs_bought'] = FS_COUNT;
-  obj.fswin      = sess.fsTotalWin.toFixed(2);
+  obj.fswin      = '0';
   obj.fsmul      = '1';
   obj.fsres      = '0';
   obj.puri       = sess.isSuperFS ? '1' : '0';
-  if (fsMore > 0) obj.fs_more = fsMore;
 }
 
 // ── doSpinRNG ─────────────────────────────────────────────────────────────────
@@ -243,75 +258,67 @@ function doSpinRNG(params, sess) {
     : spinGrid(reelSetIdx);
 
   const scatterCount = grid.filter(s => s === SCATTER_SYM).length;
-  let fsMore = 0;
-
-  // 🚨 CORREÇÃO: Lógica de Retrigger
-  if (scatterCount >= 4) {
-    if (!sess.isFreeSpins) {
-      sess.isFreeSpins = true;
-      sess.fsCurrentSpin = 1;
-      sess.fsMaxSpin = FS_COUNT;
-      sess.fsTotalWin = 0;
-      isTriggerSpin = true;
-    } else if (!isTriggerSpin) {
-      sess.fsMaxSpin += 5;
-      fsMore = 5;
-    }
+  if (scatterCount >= 4 && !sess.isFreeSpins) {
+    sess.isFreeSpins = true;
+    sess.fsCurrentSpin = 1;
+    sess.fsTotalWin = 0;
+    isTriggerSpin = true;
   }
 
+  const responses    = [];
+  let tmbWin         = 0; 
+  let activeBombs    = [];
+  let cascadeStep    = 0;
+  
   let scatterWin = 0;
   if (scatterCount >= 6) scatterWin = 100 * 20 * coinValue;
   else if (scatterCount === 5) scatterWin = 5 * 20 * coinValue;
   else if (scatterCount >= 4) scatterWin = 3 * 20 * coinValue;
 
-  const responses    = [];
-  let spinBaseWin    = 0; 
-  let activeBombs    = [];
-  let cascadeStep    = 0;
-  
   let baseTw = sess.isFreeSpins ? sess.fsTotalWin : 0;
 
   while (true) {
-    const wins = findWins(grid);
+    const clusters = findClusters(grid);
     const newBombs = findBombs(grid, isSuper);
     for (const b of newBombs) {
       if (!activeBombs.find(ab => ab.pos === b.pos)) activeBombs.push(b);
     }
 
-    if (wins.length === 0) {
+    if (clusters.length === 0) {
       const bombMulSum = activeBombs.reduce((acc, b) => acc + b.mul, 0) || 1;
-      const spinTotalWin = spinBaseWin * bombMulSum;
-      const tmbRes = (bombMulSum > 1 && spinBaseWin > 0) ? spinTotalWin : 0;
-      const finalTw = baseTw + spinTotalWin + scatterWin;
+      const tmbRes = tmbWin > 0 ? tmbWin * bombMulSum : 0;
+      const finalTw = baseTw + (tmbWin > 0 ? tmbRes : 0) + scatterWin;
       
       if (cascadeStep === 0) {
         responses.push(buildBaseResponse({
-          grid, finalTw, spinBaseWin, coinValue, index, counter, sess, pur, activeBombs, scatterWin, isTriggerSpin, fsMore
+          grid, finalTw, tmbWin, coinValue, index, counter, sess, pur, activeBombs, scatterWin, isTriggerSpin
         }));
       } else {
         responses.push(buildCascadeEndResponse({
-          grid, finalTw, spinBaseWin, tmbRes, coinValue, index, counter, sess, activeBombs, pur, scatterWin, isTriggerSpin, fsMore
+          grid, finalTw, tmbWin, tmbRes, coinValue, index, counter, sess, activeBombs, pur, scatterWin, isTriggerSpin
         }));
       }
       break;
     }
 
-    const stepWin = clusterWin(wins, coinValue); 
-    spinBaseWin += stepWin;
+    const stepWin = clusterWin(clusters, coinValue); 
+    tmbWin += stepWin;
 
-    const tmb = buildTmb(wins, newBombs);
-    const s_mark = buildSMark(wins, newBombs);
+    const tmb = buildTmb(clusters, newBombs);
+    const s_mark = buildSMark(clusters, newBombs);
     const rmul = buildRmul(activeBombs);
-    const winLines = buildWinLines(wins, coinValue); 
-    const trail = `nmwin~${spinBaseWin.toFixed(2)}`;
+    const winLines = buildWinLines(clusters, coinValue); 
+    const trail = `nmwin~${tmbWin.toFixed(2)}`;
     
-    const nextGrid = applyTumble(grid, wins, newBombs, reelSetIdx);
+    let stepTw = (sess.isFreeSpins && !isTriggerSpin) ? baseTw : (baseTw + tmbWin);
+
+    const nextGrid = applyTumble(grid, clusters, newBombs, reelSetIdx);
     cascadeStep++;
 
     responses.push(buildCascadeStepResponse({
       nextGrid, tmb, s_mark, rmul, trail, winLines,
-      baseTw, stepWin, spinBaseWin, coinValue, index, counter,
-      sess, cascadeStep, activeBombs, isTriggerSpin, fsMore
+      stepTw, stepWin, tmbWin, coinValue, index, counter,
+      sess, cascadeStep, activeBombs, isTriggerSpin
     }));
 
     grid = nextGrid;
@@ -320,7 +327,7 @@ function doSpinRNG(params, sess) {
   return responses;
 }
 
-function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, counter, sess, pur, activeBombs, scatterWin, isTriggerSpin, fsMore }) {
+function buildBaseResponse({ grid, finalTw, tmbWin, coinValue, index, counter, sess, pur, activeBombs, scatterWin, isTriggerSpin }) {
   const obj = {
     tw:            finalTw.toFixed(2),
     balance:       fmt(sess.balance),
@@ -340,7 +347,7 @@ function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, count
     counter,
     l:             '20',
     s:             grid.join(','),
-    w:             scatterWin > 0 ? scatterWin.toFixed(2) : '0',
+    w:             '0',
     st:            'rect',
     sw:            COLS,
   };
@@ -352,7 +359,7 @@ function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, count
   }
 
   if (sess.isFreeSpins && !isTriggerSpin) {
-    addFSFields(obj, sess, fsMore);
+    addFSFields(obj, sess);
   }
 
   if (isTriggerSpin) {
@@ -361,7 +368,7 @@ function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, count
     obj.fs = '1';
     obj.fsmax = FS_COUNT;
     obj['fs_bought'] = FS_COUNT;
-    obj.fswin = '0.00';
+    obj.fswin = '0';
     obj.fsmul = '1';
     obj.fsres = '0';
   }
@@ -369,9 +376,9 @@ function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, count
   return serialize(obj);
 }
 
-function buildCascadeStepResponse({ nextGrid, tmb, s_mark, rmul, trail, winLines, baseTw, stepWin, spinBaseWin, coinValue, index, counter, sess, cascadeStep, activeBombs, isTriggerSpin, fsMore }) {
+function buildCascadeStepResponse({ nextGrid, tmb, s_mark, rmul, trail, winLines, stepTw, stepWin, tmbWin, coinValue, index, counter, sess, cascadeStep, activeBombs, isTriggerSpin }) {
   const obj = {
-    tw:            baseTw.toFixed(2), // 🚨 CORREÇÃO: tw fica congelado durante a cascata
+    tw:            stepTw.toFixed(2),
     tmb,
     balance:       fmt(sess.balance),
     index,
@@ -380,7 +387,7 @@ function buildCascadeStepResponse({ nextGrid, tmb, s_mark, rmul, trail, winLines
     balance_bonus: '0.00',
     na:            's',
     rs:            't',
-    tmb_win:       spinBaseWin.toFixed(2), // 🚨 CORREÇÃO: tmb_win acumula o ganho da cascata
+    tmb_win:       tmbWin.toFixed(2),
     bl:            '0',
     stime:         Date.now(),
     sa:            randRow(),
@@ -405,15 +412,15 @@ function buildCascadeStepResponse({ nextGrid, tmb, s_mark, rmul, trail, winLines
   if (rmul) obj.rmul = rmul;
   
   if (sess.isFreeSpins && !isTriggerSpin) {
-    addFSFields(obj, sess, fsMore);
+    addFSFields(obj, sess);
   }
 
   return serialize(obj);
 }
 
-function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue, index, counter, sess, activeBombs, pur, scatterWin, isTriggerSpin, fsMore }) {
+function buildCascadeEndResponse({ grid, finalTw, tmbWin, tmbRes, coinValue, index, counter, sess, activeBombs, pur, scatterWin, isTriggerSpin }) {
   const obj = {
-    tw:            finalTw.toFixed(2), // 🚨 CORREÇÃO: tw dá o salto final aqui
+    tw:            finalTw.toFixed(2),
     balance:       fmt(sess.balance),
     index,
     balance_cash:  fmt(sess.balance),
@@ -421,7 +428,7 @@ function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue
     balance_bonus: '0.00',
     na:            's',
     rs_t:          '1',
-    tmb_win:       spinBaseWin.toFixed(2),
+    tmb_win:       tmbWin.toFixed(2),
     bl:            '0',
     stime:         Date.now(),
     sa:            randRow(),
@@ -433,15 +440,15 @@ function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue
     l:             '20',
     s:             grid.join(','),
     w:             '0',
-    trail:         `nmwin~${spinBaseWin.toFixed(2)}`,
+    trail:         `nmwin~${tmbWin.toFixed(2)}`,
     st:            'rect',
     sw:            COLS,
   };
 
-  if (activeBombs.length && spinBaseWin > 0) {
+  if (activeBombs.length && tmbWin > 0) {
     obj.rmul = buildRmul(activeBombs);
     const totalMul = activeBombs.reduce((a, b) => a + b.mul, 0);
-    obj.trail    = `nmwin~${spinBaseWin.toFixed(2)};totmul~${totalMul}`;
+    obj.trail    = `nmwin~${tmbWin.toFixed(2)};totmul~${totalMul}`;
     obj.tmb_res  = tmbRes.toFixed(2);
   }
 
@@ -452,7 +459,7 @@ function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue
   }
 
   if (sess.isFreeSpins && !isTriggerSpin) {
-    addFSFields(obj, sess, fsMore);
+    addFSFields(obj, sess);
   }
 
   if (isTriggerSpin) {
@@ -461,7 +468,7 @@ function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue
     obj.fs = '1';
     obj.fsmax = FS_COUNT;
     obj['fs_bought'] = FS_COUNT;
-    obj.fswin = '0.00';
+    obj.fswin = '0';
     obj.fsmul = '1';
     obj.fsres = '0';
   }
