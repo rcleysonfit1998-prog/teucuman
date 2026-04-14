@@ -356,11 +356,11 @@ function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, count
     balance:       fmt(sess.balance),
     index,
     balance_cash:  fmt(sess.balance),
-    reel_set:      '0', // O cliente sempre vê reel_set=0
+    reel_set:      '0',
     balance_bonus: '0.00',
     na:            's',
     tmb_win:       '0',
-    bl:            bl.toString(), // 🚨 ANTE BET
+    bl:            bl.toString(),
     stime:         Date.now(),
     sa:            randRow(),
     sb:            randRow(),
@@ -374,6 +374,11 @@ function buildBaseResponse({ grid, finalTw, spinBaseWin, coinValue, index, count
     st:            'rect',
     sw:            COLS,
   };
+
+  // 🚨 CORREÇÃO: Se houver bombas na tela, MESMO SEM GANHO, o rmul é OBRIGATÓRIO!
+  if (activeBombs && activeBombs.length > 0) {
+    obj.rmul = buildRmul(activeBombs);
+  }
 
   if (scatterWin > 0) {
     const scatterPos = [];
@@ -452,7 +457,7 @@ function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue
     na:            's',
     rs_t:          '1',
     tmb_win:       spinBaseWin.toFixed(2),
-    bl:            bl.toString(), // 🚨 ANTE BET
+    bl:            bl.toString(),
     stime:         Date.now(),
     sa:            randRow(),
     sb:            randRow(),
@@ -468,11 +473,15 @@ function buildCascadeEndResponse({ grid, finalTw, spinBaseWin, tmbRes, coinValue
     sw:            COLS,
   };
 
-  if (activeBombs.length && spinBaseWin > 0) {
+  // 🚨 CORREÇÃO: Garante que o rmul seja enviado se houver bombas, independente do ganho
+  if (activeBombs && activeBombs.length > 0) {
     obj.rmul = buildRmul(activeBombs);
-    const totalMul = activeBombs.reduce((a, b) => a + b.mul, 0);
-    obj.trail    = `nmwin~${spinBaseWin.toFixed(2)};totmul~${totalMul}`;
-    obj.tmb_res  = tmbRes.toFixed(2);
+    
+    if (spinBaseWin > 0) {
+      const totalMul = activeBombs.reduce((a, b) => a + b.mul, 0);
+      obj.trail    = `nmwin~${spinBaseWin.toFixed(2)};totmul~${totalMul}`;
+      obj.tmb_res  = tmbRes.toFixed(2);
+    }
   }
 
   if (scatterWin > 0) {
