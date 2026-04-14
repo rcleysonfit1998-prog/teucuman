@@ -2,16 +2,13 @@
 const path    = require('path');
 const fs      = require('fs');
 const session = require('../models/sessionModel');
+const { fmt } = require('../utils/fmt');
 
 const RESPONSES_PATH = path.join(__dirname, '../../games/sb/responses/index.json');
 let _r = null;
 function R() {
   if (!_r) _r = JSON.parse(fs.readFileSync(RESPONSES_PATH, 'utf8'));
   return _r;
-}
-
-function fmt(n) {
-  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function parse(raw) {
