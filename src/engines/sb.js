@@ -2,7 +2,7 @@
 const db  = require('../config/db');
 const rng = require('./rng');
 
-const { doInitRNG, doCollectRNG, fmt, serialize, SCATTER_SYM, FS_COUNT } = rng;
+const { doInitRNG, doCollectRNG, fmt, serialize, FS_COUNT } = rng;
 
 const DEFAULT_BALANCE = parseFloat(process.env.DEFAULT_BALANCE || '50000');
 
@@ -68,7 +68,6 @@ async function handleInit(sess) {
 }
 
 async function handleSpin(sess, params) {
-  // 🚨 CORREÇÃO CRÍTICA: Atualizar index e counter da fila para bater com a requisição do cliente
   if (sess.pendingResponses.length > 0) {
     let resp = sess.pendingResponses.shift();
     const reqIndex = params.index || (sess.index + 1);
@@ -87,12 +86,12 @@ async function handleSpin(sess, params) {
 
   if (pur === 1 || pur === 0) {
     const isSuperBuy = pur === 1;
-    // Custo real: Normal FS = 100x bet (2000 * coinValue), Super FS = 500x bet (10000 * coinValue)
     const cost = isSuperBuy ? coinValue * 10000 : coinValue * 2000;
     sess.balance = Math.max(0, sess.balance - cost);
     sess.isFreeSpins = true;
     sess.isSuperFS   = isSuperBuy;
     sess.fsCurrentSpin = 1;
+    sess.fsMaxSpin   = FS_COUNT;
     sess.fsTotalWin  = 0;
     sess.reelSet     = 0;
     await saveBalance(sess.mgckey, sess.balance);
@@ -107,6 +106,7 @@ async function handleSpin(sess, params) {
     return buildAndQueueSpin(sess, params, coinValue, undefined);
   }
 
+  // 🚨 CORREÇÃO: O custo da aposta é coinValue * 20 linhas
   const cost = coinValue * 20;
   sess.balance = Math.max(0, sess.balance - cost);
   await saveBalance(sess.mgckey, sess.balance);
@@ -119,16 +119,22 @@ function buildAndQueueSpin(sess, params, coinValue, pur) {
   const lastResp = responses[responses.length - 1];
   const tw = parseFloat(getField(lastResp, 'tw') || '0');
 
+  // 🚨 CORREÇÃO: O saldo enviado nas respostas deve ser o saldo PRÉ-GANHO.
+  // O cliente fará a animação do ganho e atualizará visualmente.
+  const displayBalance = sess.balance;
+
   if (sess.isFreeSpins) {
-    sess.fsTotalWin = tw; // O tw já vem acumulado do rng.js
+    sess.fsTotalWin = tw;
   } else {
     if (tw > 0) {
+      // Adicionamos o ganho ao saldo real no servidor imediatamente
       sess.balance += tw;
       saveBalance(sess.mgckey, sess.balance);
     }
   }
 
-  const patched = responses.map(r => patchBalance(r, sess.balance));
+  // Injetamos o saldo pré-ganho em todas as respostas da cascata
+  const patched = responses.map(r => patchBalance(r, displayBalance));
 
   const first = patched.shift();
   if (patched.length) sess.pendingResponses.push(...patched);
@@ -147,7 +153,7 @@ function buildFSEndResponse(sess, coinValue, params) {
     balance_cash:  fmt(sess.balance),
     reel_set:      sess.reelSet,
     balance_bonus: '0.00',
-    na:            'c', // 🚨 ÚNICO LUGAR ONDE na=c É ENVIADO
+    na:            'c',
     tmb_win:       '0',
     bl:            '0',
     stime:         Date.now(),
@@ -161,13 +167,13 @@ function buildFSEndResponse(sess, coinValue, params) {
     s:             grid.join(','),
     w:             '0',
     'fs_bought':   FS_COUNT,
-    fs:            sess.fsCurrentSpin, // 11
+    fs:            sess.fsCurrentSpin,
     st:            'rect',
     sw:            6,
     fsmul:         '1',
     fsmul_total:   '1',
-    fswin_total:   '0.00', // 🚨 fswin é sempre 0 no SB1000
-    fs_total:      FS_COUNT,
+    fswin_total:   '0.00',
+    fs_total:      sess.fsMaxSpin,
     fsres_total:   '0.00',
     puri:          sess.isSuperFS ? '1' : '0',
   });
