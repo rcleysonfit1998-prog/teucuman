@@ -82,10 +82,12 @@ async function handleSpin(sess, params) {
 
   const coinValue = parseFloat(params.c || '0.20');
   const pur       = params.pur !== undefined ? parseInt(params.pur) : -1;
+  const bl        = parseInt(params.bl || '0'); // 🚨 ANTE BET
   sess.index = parseInt(params.index || sess.index + 1);
 
   if (pur === 1 || pur === 0) {
     const isSuperBuy = pur === 1;
+    // A compra de bônus ignora o Ante Bet. O custo é sempre 100x ou 500x a aposta base (coinValue * 20)
     const cost = isSuperBuy ? coinValue * 10000 : coinValue * 2000;
     sess.balance = Math.max(0, sess.balance - cost);
     sess.isFreeSpins = true;
@@ -101,13 +103,15 @@ async function handleSpin(sess, params) {
   if (sess.isFreeSpins) {
     sess.fsCurrentSpin++;
     if (sess.fsCurrentSpin > sess.fsMaxSpin) {
-      return buildFSEndResponse(sess, coinValue, params);
+      return buildFSEndResponse(sess, coinValue, params, bl);
     }
     return buildAndQueueSpin(sess, params, coinValue, undefined);
   }
 
-  // 🚨 CORREÇÃO: O custo da aposta é coinValue * 20 linhas
-  const cost = coinValue * 20;
+  // 🚨 ANTE BET: Se bl=1, o multiplicador da aposta é 25x. Se bl=0, é 20x.
+  const betMultiplier = bl === 1 ? 25 : 20;
+  const cost = coinValue * betMultiplier;
+  
   sess.balance = Math.max(0, sess.balance - cost);
   await saveBalance(sess.mgckey, sess.balance);
   return buildAndQueueSpin(sess, params, coinValue, undefined);
@@ -119,21 +123,17 @@ function buildAndQueueSpin(sess, params, coinValue, pur) {
   const lastResp = responses[responses.length - 1];
   const tw = parseFloat(getField(lastResp, 'tw') || '0');
 
-  // 🚨 CORREÇÃO: O saldo enviado nas respostas deve ser o saldo PRÉ-GANHO.
-  // O cliente fará a animação do ganho e atualizará visualmente.
   const displayBalance = sess.balance;
 
   if (sess.isFreeSpins) {
     sess.fsTotalWin = tw;
   } else {
     if (tw > 0) {
-      // Adicionamos o ganho ao saldo real no servidor imediatamente
       sess.balance += tw;
       saveBalance(sess.mgckey, sess.balance);
     }
   }
 
-  // Injetamos o saldo pré-ganho em todas as respostas da cascata
   const patched = responses.map(r => patchBalance(r, displayBalance));
 
   const first = patched.shift();
@@ -141,7 +141,7 @@ function buildAndQueueSpin(sess, params, coinValue, pur) {
   return first;
 }
 
-function buildFSEndResponse(sess, coinValue, params) {
+function buildFSEndResponse(sess, coinValue, params, bl) {
   const syms = [3,4,5,6,7,8,9,10,11];
   const grid = Array.from({length:30}, () => syms[Math.floor(Math.random()*syms.length)]);
   const tw   = sess.fsTotalWin;
@@ -151,11 +151,11 @@ function buildFSEndResponse(sess, coinValue, params) {
     balance:       fmt(sess.balance),
     index:         params.index,
     balance_cash:  fmt(sess.balance),
-    reel_set:      sess.reelSet,
+    reel_set:      '0',
     balance_bonus: '0.00',
     na:            'c',
     tmb_win:       '0',
-    bl:            '0',
+    bl:            bl.toString(), // 🚨 ANTE BET
     stime:         Date.now(),
     sa:            randRow(),
     sb:            randRow(),
