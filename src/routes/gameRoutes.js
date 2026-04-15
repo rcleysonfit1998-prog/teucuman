@@ -25,7 +25,7 @@ const SYMBOL_TO_FOLDER = {
   vs20sugarrushx: 'sr',
 };
 
-app.use('/gs2c_/gameService', (req, res, next) => {
+router.use('/gs2c_/gameService', (req, res, next) => {
   req.url = '/:gameId/gs2c_/gameService';
   next();
 });
