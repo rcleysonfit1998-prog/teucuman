@@ -17,12 +17,18 @@ router.all('/gs2c_/gameService', (_req, res) =>
 // Todas as rotas abaixo exigem :gameId válido
 router.use('/:gameId', resolveGame);
 
+
 // ── HTML do jogo ──────────────────────────────────────────────────────────────
 // Mapeamento symbol → pasta dentro de /games/
 const SYMBOL_TO_FOLDER = {
   vs20fruitswx:   'sb',
   vs20sugarrushx: 'sr',
 };
+
+app.use('/gs2c_/gameService', (req, res, next) => {
+  req.url = '/:gameId/gs2c_/gameService';
+  next();
+});
 
 router.get('/:gameId/gs2c/html5Game.html', (req, res) => {
   const folder = SYMBOL_TO_FOLDER[req.game.symbol];
@@ -31,7 +37,7 @@ router.get('/:gameId/gs2c/html5Game.html', (req, res) => {
 });
 
 // ── Game Service (com underscore no path, padrão Pragmatic) ───────────────────
-router.post('/api/:gameId/gs2c_/gameService', gameCtrl.gameService);
+router.post('/:gameId/gs2c_/gameService', gameCtrl.gameService);
 
 // ── Balance & Settings (compartilhados) ───────────────────────────────────────
 router.get('/:gameId/gs2c/reloadBalance.do', gameCtrl.reloadBalance);
