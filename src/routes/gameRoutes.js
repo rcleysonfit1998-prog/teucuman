@@ -8,6 +8,12 @@ const gameCtrl = require('../controllers/gameController');
 
 const router = Router();
 
+// Rota de captura para pedidos sem `:gameId` (ex.: /api/slots/gs2c_/gameService)
+// Retorna erro claro explicando o formato correto da URL.
+router.all('/gs2c_/gameService', (_req, res) =>
+  res.status(400).json({ error: 'Missing gameId in URL. Expected /api/slots/:gameId/gs2c_/gameService' })
+);
+
 // Todas as rotas abaixo exigem :gameId válido
 router.use('/:gameId', resolveGame);
 
@@ -25,7 +31,7 @@ router.get('/:gameId/gs2c/html5Game.html', (req, res) => {
 });
 
 // ── Game Service (com underscore no path, padrão Pragmatic) ───────────────────
-router.post('/:gameId/gs2c_/gameService', gameCtrl.gameService);
+router.post('/api/:gameId/gs2c_/gameService', gameCtrl.gameService);
 
 // ── Balance & Settings (compartilhados) ───────────────────────────────────────
 router.get('/:gameId/gs2c/reloadBalance.do', gameCtrl.reloadBalance);
