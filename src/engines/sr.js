@@ -69,20 +69,21 @@ async function handle(action, params) {
   const sess = getState(mgckey);
 
   switch (action) {
-    case 'doInit':    return handleInit(sess);
+    case 'doInit':    return handleInit(sess, params);
     case 'doSpin':    return handleSpin(sess, params);
-    case 'doCollect': return handleCollect(sess);
+    case 'doCollect': return handleCollect(sess, params); // ⬅️ CORREÇÃO: params adicionado!
     default:
       return `balance=${fmt(sess.balance)}&balance_cash=${fmt(sess.balance)}&balance_bonus=0.00&na=s&stime=${Date.now()}`;
   }
 }
 
-async function handleInit(sess) {
+async function handleInit(sess, params) {
   sess.index = 1;
-  return doInitRNG(sess.balance);
+  return rng.doInitRNG(sess.balance, params);
 }
 
 async function handleSpin(sess, params) {
+  // Return queued tumble step if pending
   if (sess.pendingResponses.length > 0) {
     let resp = sess.pendingResponses.shift();
     const reqIndex   = parseInt(params.index   || sess.index + 1);
@@ -90,7 +91,7 @@ async function handleSpin(sess, params) {
     sess.index = reqIndex;
     resp = resp
       .replace(/index=[0-9]+/g,   `index=${reqIndex}`)
-      .replace(/counter=[0-9]+/g, `counter=${reqCounter}`)
+      .replace(/counter=[0-9]+/g, `counter=${reqCounter + 1}`) // ⬅️ CORREÇÃO: Sempre +1
       .replace(/stime=[0-9]+/g,   `stime=${Date.now()}`);
     return resp;
   }
@@ -100,8 +101,9 @@ async function handleSpin(sess, params) {
   const bl        = parseInt(params.bl || '0');
   sess.index      = parseInt(params.index || sess.index + 1);
 
+  // ── Buy feature ──────────────────────────────────────────────────────────
   if (pur === 1 || pur === 0) {
-    const isSuperBuy = pur === 1; // pur=1 é Super Buy (500x), pur=0 é Normal Buy (100x)
+    const isSuperBuy = pur === 1;
     const betMul     = bl === 1 ? 25 : 20;
     const totalBet   = coinValue * betMul;
     const cost       = isSuperBuy ? totalBet * 500 : totalBet * 100;
@@ -123,9 +125,10 @@ async function handleSpin(sess, params) {
     return await buildAndQueueSpin(sess, params, coinValue, pur);
   }
 
+  // ── Ongoing Free Spins ────────────────────────────────────────────────────
   if (sess.isFreeSpins) {
     if (sess.retriggered) {
-        sess.retriggered = false; // Pausa o incremento visual do giro atual
+        sess.retriggered = false;
     } else {
         sess.fsCurrentSpin++;
     }
@@ -136,6 +139,7 @@ async function handleSpin(sess, params) {
     return await buildAndQueueSpin(sess, params, coinValue, undefined);
   }
 
+  // ── Normal spin ───────────────────────────────────────────────────────────
   const betMul = bl === 1 ? 25 : 20;
   const bet    = coinValue * betMul;
 
@@ -224,14 +228,20 @@ function buildFSEndResponse(sess, coinValue, params, bl) {
   return resp;
 }
 
-async function handleCollect(sess) {
+async function handleCollect(sess, params) {
   const win = sess.lastTotalWin || 0;
   if (win > 0) {
     const newBalance = await persistTransaction(sess.mgckey, 0, win);
     sess.balance = newBalance;
   }
   sess.lastTotalWin = 0;
-  return rng.doCollectRNG(sess.balance, sess.index);
+  
+  // ⬅️ CORREÇÃO: Lê o index e counter que o cliente enviou
+  const reqIndex = params.index || sess.index;
+  const reqCounter = params.counter || (reqIndex * 2);
+  sess.index = parseInt(reqIndex);
+
+  return rng.doCollectRNG(sess.balance, reqIndex, reqCounter);
 }
 
 function getField(str, field) {

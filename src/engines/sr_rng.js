@@ -280,8 +280,10 @@ function doSpinRNG(params, sess) {
   const coinValue  = parseFloat(params.c || '0.20');
   const pur        = params.pur !== undefined ? parseInt(params.pur) : -1;
   const isFreeSpins = sess.isFreeSpins || false;
-  const index      = sess.index || 1;
-  const counter    = index * 2;
+  
+  // ⬅️ CORREÇÃO: Lê os params e soma +1 no counter
+  const index      = parseInt(params.index || sess.index || 1);
+  const counter    = parseInt(params.counter || index * 2) + 1; 
 
   let grid = (pur === 0 || pur === 1)
     ? spinGridWithScatters(3)
@@ -466,9 +468,13 @@ function addFSFields(obj, sess, hitCounts, fsmore, pur) {
   }
 }
 
-function doInitRNG(balance) {
+function doInitRNG(balance, params = {}) {
   const defGrid = spinGrid();
   const reel0   = REEL_SET.map(r => r.join(',')).join('~');
+  
+  // ⬅️ CORREÇÃO: Sincroniza o init com o cliente
+  const index   = params.index || '1';
+  const counter = params.counter ? parseInt(params.counter) + 1 : 2;
 
   return serialize({
     is1000:        'true',
@@ -476,7 +482,7 @@ function doInitRNG(balance) {
     balance:       fmt(balance),
     cfgs:          '1',
     ver:           '3',
-    index:         '1',
+    index:         index,
     balance_cash:  fmt(balance),
     def_sb:        randRow(),
     reel_set_size: '1',
@@ -501,7 +507,7 @@ function doInitRNG(balance) {
     c:             '0.10',
     sw:            COLS,
     sver:          '5',
-    counter:       '2',
+    counter:       counter.toString(),
     ntp:           '0.00',
     paytable:      PAYTABLE_STR,
     l:             '20',
@@ -512,6 +518,7 @@ function doInitRNG(balance) {
     total_bet_min: '0.01',
   });
 }
+
 
 const PAYTABLE_STR = (() => {
   const rows = [];
@@ -526,10 +533,10 @@ const PAYTABLE_STR = (() => {
   return rows.join(';');
 })();
 
-function doCollectRNG(balance, index) {
+function doCollectRNG(balance, index, counter) {
   return serialize({
     index,
-    counter:       index * 2,
+    counter:       parseInt(counter) + 1, // ⬅️ CORREÇÃO: Sempre +1
     balance:       fmt(balance),
     balance_cash:  fmt(balance),
     balance_bonus: '0.00',
