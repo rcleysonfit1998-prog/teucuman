@@ -25,8 +25,16 @@ const SYMBOL_TO_FOLDER = {
   vs20sugarrushx: 'sr',
 };
 
-router.use('/gs2c_/gameService', (req, res, next) => {
-  req.url = '/:gameId/gs2c_/gameService';
+app.use('/gs2c_/gameService', (req, res, next) => {
+  // Tenta pegar o nome do jogo do referer se não vier na URL
+  const referer = req.headers.referer || '';
+  const match = referer.match(/\/slots\/([^\/]+)/);
+  const gameId = match ? match[1] : 'default';
+
+  // Agora reescrevemos com o ID REAL (ex: SweetBonanza1000)
+  req.url = `/${gameId}/gs2c_/gameService`;
+  
+  console.log(`[Proxy] Redirecionando para: ${req.url}`);
   next();
 });
 
