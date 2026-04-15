@@ -25,19 +25,6 @@ const SYMBOL_TO_FOLDER = {
   vs20sugarrushx: 'sr',
 };
 
-router.use('/gs2c_/gameService', (req, res, next) => {
-  // Tenta pegar o nome do jogo do referer se não vier na URL
-  const referer = req.headers.referer || '';
-  const match = referer.match(/\/slots\/([^\/]+)/);
-  const gameId = match ? match[1] : 'default';
-
-  // Agora reescrevemos com o ID REAL (ex: SweetBonanza1000)
-  req.url = `/${gameId}/gs2c_/gameService`;
-  
-  console.log(`[Proxy] Redirecionando para: ${req.url}`);
-  next();
-});
-
 router.get('/:gameId/gs2c/html5Game.html', (req, res) => {
   const folder = SYMBOL_TO_FOLDER[req.game.symbol];
   if (!folder) return res.status(404).send('Game HTML not found');
