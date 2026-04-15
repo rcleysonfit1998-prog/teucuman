@@ -78,13 +78,27 @@ const FS_AWARDS = { 3: 10, 4: 12, 5: 15, 6: 20, 7: 30 };
 
 function rnd(max) { return Math.floor(Math.random() * max); }
 
-function spinGrid() {
+// ── Spin grid from reel set ───────────────────────────────────────────────────
+function spinGrid(allowTrigger = true) {
   const grid = new Array(GRID_SIZE);
+  let scatterCount = 0;
+  
   for (let col = 0; col < COLS; col++) {
     const reel = REEL_SET[col];
     const stop = rnd(reel.length);
     for (let row = 0; row < ROWS; row++) {
-      grid[col * ROWS + row] = reel[(stop + row) % reel.length];
+      let sym = reel[(stop + row) % reel.length];
+      
+      // Controlador de Scatters: Limita a no máximo 2 scatters se não for um giro premiado
+      if (sym === SCATTER) {
+         if (!allowTrigger && scatterCount >= 2) {
+             // Substitui o scatter excedente por uma fruta aleatória (3 a 9)
+             sym = Math.floor(Math.random() * 7) + 3;
+         } else {
+             scatterCount++;
+         }
+      }
+      grid[col * ROWS + row] = sym;
     }
   }
   return grid;
@@ -93,7 +107,7 @@ function spinGrid() {
 function spinGridWithScatters(minScatters) {
   let grid, tries = 0;
   do {
-    grid = spinGrid();
+    grid = spinGrid(true); // true = Permite cair 3 ou mais scatters
     tries++;
   } while (grid.filter(s => s === SCATTER).length < minScatters && tries < 2000);
   return grid;
@@ -281,13 +295,28 @@ function doSpinRNG(params, sess) {
   const pur        = params.pur !== undefined ? parseInt(params.pur) : -1;
   const isFreeSpins = sess.isFreeSpins || false;
   
-  // ⬅️ CORREÇÃO: Lê os params e soma +1 no counter
   const index      = parseInt(params.index || sess.index || 1);
   const counter    = parseInt(params.counter || index * 2) + 1; 
 
-  let grid = (pur === 0 || pur === 1)
-    ? spinGridWithScatters(3)
-    : spinGrid();
+  // 🎛️ LÓGICA DE CONTROLE DE SCATTERS E DIFICULDADE
+  let grid;
+  if (pur === 0 || pur === 1) {
+    // Compra de Bônus: Força 3+ scatters
+    grid = spinGridWithScatters(3);
+  } else {
+    // Define a chance real de cair 3+ scatters com base na dificuldade
+    let triggerChance = 0;
+    if (DIFFICULTY_LEVEL === 1) triggerChance = isFreeSpins ? 0.015 : 0.007; // 1.5% retrigger, 0.7% trigger base
+    if (DIFFICULTY_LEVEL === 2) triggerChance = isFreeSpins ? 0.030 : 0.012; // 3% retrigger, 1.2% trigger base
+    if (DIFFICULTY_LEVEL === 3) triggerChance = isFreeSpins ? 0.080 : 0.020; // 8% retrigger, 2% trigger base
+    if (DIFFICULTY_LEVEL === 4) triggerChance = isFreeSpins ? 0.250 : 0.100; // Modo Streamer - 25% retrigger, 10% trigger base
+
+    if (Math.random() < triggerChance) {
+        grid = spinGridWithScatters(3); // Sorteado! Permite o bônus/retrigger
+    } else {
+        grid = spinGrid(false); // Normal: Trava em no máximo 2 scatters
+    }
+  }
 
   let hitCounts = isFreeSpins
     ? (sess.hitCounts || new Array(GRID_SIZE).fill(0))

@@ -38,11 +38,9 @@ router.post('/:gameId/gs2c_/gameService', gameCtrl.gameService);
 router.get('/:gameId/gs2c/reloadBalance.do', gameCtrl.reloadBalance);
 router.post('/:gameId/gs2c/saveSettings.do', gameCtrl.saveSettings);
 
-// Captura a rota de customização para qualquer jogo
-router.all('/:gameId/gs2c/common/v1/games-html5/games/vs/:gameName/desktop/customizations.info', (_req, res) => res.status(200).json({}));
-
 // ── Stats stub ────────────────────────────────────────────────────────────────
 router.all('/:gameId/gs2c/stats.do', (_req, res) => res.status(200).send(''));
+router.all('/:gameId/gs2c/common/v1/games-html5/games/vs/:gameName/desktop/customizations.info', (_req, res) => res.status(200).json({}));
 
 // ── Assets estáticos do jogo (unificados) ─────────────────────────────────────
 router.use(

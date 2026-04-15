@@ -22,7 +22,7 @@ async function gameService(req, res, next) {
  */
 async function reloadBalance(req, res, next) {
   try {
-    const mgckey = req.query.mgckey || 'default';
+    const mgckey = req.query.mgckey || 'default'; // pega do html5Game.html ou usa 'default' se não fornecido
     const balance = await balanceService.getBalance(mgckey);
     res.type('text/plain').send(balanceService.formatBalanceResponse(balance));
   } catch {
