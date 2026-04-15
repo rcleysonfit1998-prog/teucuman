@@ -2,11 +2,10 @@
 const db  = require('../config/db');
 const rng = require('./sr_rng');
 
-const { doInitRNG, doCollectRNG, fmt, serialize, SCATTER, FS_AWARDS, GRID_SIZE } = rng;
+const { doInitRNG, fmt, serialize, SCATTER, FS_AWARDS, GRID_SIZE } = rng;
 
 const DEFAULT_BALANCE = parseFloat(process.env.DEFAULT_BALANCE || '50000');
 
-// ── In-memory session state ───────────────────────────────────────────────────
 const memState = new Map();
 
 function getState(mgckey) {
@@ -20,9 +19,9 @@ function getState(mgckey) {
       fsCurrentSpin:       0,
       fsMaxSpin:           10,
       fsTotalWin:          0,
-      lastTotalWin:        0,
       hitCounts:           new Array(GRID_SIZE).fill(0),
       hitCountsInitialized: false,
+      retriggered:         false,
       pendingResponses:    [],
     });
   }
@@ -64,7 +63,6 @@ async function persistTransaction(mgckey, bet, win) {
   }
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
 async function handle(action, params) {
   const mgckey = params.mgckey || 'default';
   await loadFromDB(mgckey);
@@ -79,15 +77,12 @@ async function handle(action, params) {
   }
 }
 
-// ── doInit ────────────────────────────────────────────────────────────────────
 async function handleInit(sess) {
   sess.index = 1;
   return doInitRNG(sess.balance);
 }
 
-// ── doSpin ────────────────────────────────────────────────────────────────────
 async function handleSpin(sess, params) {
-  // Return queued tumble step if pending
   if (sess.pendingResponses.length > 0) {
     let resp = sess.pendingResponses.shift();
     const reqIndex   = parseInt(params.index   || sess.index + 1);
@@ -105,10 +100,8 @@ async function handleSpin(sess, params) {
   const bl        = parseInt(params.bl || '0');
   sess.index      = parseInt(params.index || sess.index + 1);
 
-  // ── Buy feature ──────────────────────────────────────────────────────────
-  // pur=1 = Normal FS (100× total bet), pur=0 = Super FS (500× total bet)
   if (pur === 1 || pur === 0) {
-    const isSuperBuy = pur === 0;
+    const isSuperBuy = pur === 1; // pur=1 é Super Buy (500x), pur=0 é Normal Buy (100x)
     const betMul     = bl === 1 ? 25 : 20;
     const totalBet   = coinValue * betMul;
     const cost       = isSuperBuy ? totalBet * 500 : totalBet * 100;
@@ -121,20 +114,21 @@ async function handleSpin(sess, params) {
     sess.fsCurrentSpin        = 1;
     sess.fsMaxSpin            = 10;
     sess.fsTotalWin           = 0;
+    sess.retriggered          = false;
     sess.hitCountsInitialized = false;
     sess.hitCounts            = isSuperBuy
-      ? new Array(GRID_SIZE).fill(2)   // Super FS: all spots start at 2x
-      : new Array(GRID_SIZE).fill(0);  // Normal FS: clean
+      ? new Array(GRID_SIZE).fill(2)
+      : new Array(GRID_SIZE).fill(0);
 
     return await buildAndQueueSpin(sess, params, coinValue, pur);
   }
 
-  // ── Ongoing Free Spins ────────────────────────────────────────────────────
   if (sess.isFreeSpins) {
-    sess.fsCurrentSpin++;
-
-    // Check for scatter re-trigger on the previous spin grid
-    // (handled inside buildAndQueueSpin via triggerFS flag)
+    if (sess.retriggered) {
+        sess.retriggered = false; // Pausa o incremento visual do giro atual
+    } else {
+        sess.fsCurrentSpin++;
+    }
 
     if (sess.fsCurrentSpin > sess.fsMaxSpin) {
       return buildFSEndResponse(sess, coinValue, params, bl);
@@ -142,43 +136,28 @@ async function handleSpin(sess, params) {
     return await buildAndQueueSpin(sess, params, coinValue, undefined);
   }
 
-  // ── Normal spin ───────────────────────────────────────────────────────────
   const betMul = bl === 1 ? 25 : 20;
   const bet    = coinValue * betMul;
 
   const balanceAfterBet = await persistTransaction(sess.mgckey, bet, 0);
   sess.balance = balanceAfterBet;
-  // Reset multiplier spots for base game
   sess.hitCounts = new Array(GRID_SIZE).fill(0);
 
   return await buildAndQueueSpin(sess, params, coinValue, undefined);
 }
 
-// ── Build and queue all tumble responses for one spin ─────────────────────────
 async function buildAndQueueSpin(sess, params, coinValue, pur) {
   const { responses, hitCounts } = rng.doSpinRNG({ ...params, pur }, sess);
 
-  // Update session hitCounts (may have been modified during FS tumbling)
   if (sess.isFreeSpins) {
     sess.hitCounts = hitCounts;
   }
 
-  // Get total win from last response
   const lastResp = responses[responses.length - 1];
   const tw = parseFloat(getField(lastResp, 'tw') || '0');
 
   if (sess.isFreeSpins) {
-    sess.fsTotalWin += tw;
-    // Check for scatter re-trigger in the grid of the first response
-    const s = getField(responses[0], 's');
-    if (s && !pur) {
-      const grid = s.split(',').map(Number);
-      const scatters = grid.filter(x => x === SCATTER).length;
-      if (scatters >= 3) {
-        const extra = FS_AWARDS[Math.min(scatters, 7)] || 0;
-        if (extra > 0) sess.fsMaxSpin += extra;
-      }
-    }
+    sess.fsTotalWin = tw;
   } else {
     if (tw > 0) {
       const newBalance = await persistTransaction(sess.mgckey, 0, tw);
@@ -195,11 +174,13 @@ async function buildAndQueueSpin(sess, params, coinValue, pur) {
   return first;
 }
 
-// ── FS end response (spin fs=N+1, na=c) ──────────────────────────────────────
 function buildFSEndResponse(sess, coinValue, params, bl) {
   const tw   = sess.fsTotalWin;
   const syms = [3,4,5,6,7,8,9];
   const grid = Array.from({ length: GRID_SIZE }, () => syms[Math.floor(Math.random() * syms.length)]);
+
+  const slm = rng.buildSlm(sess.hitCounts);
+  const slmFields = slm.slm_mp !== undefined ? { slm_mp: slm.slm_mp, slm_mv: slm.slm_mv } : {};
 
   const resp = serialize({
     tw:            tw.toFixed(2),
@@ -209,10 +190,9 @@ function buildFSEndResponse(sess, coinValue, params, bl) {
     balance_bonus: '0.00',
     na:            'c',
     tmb_win:       '0',
-    bl:            bl.toString(),
     stime:         Date.now(),
-    sa:            randRow(),
-    sb:            randRow(),
+    sa:            rng.randRow(),
+    sb:            rng.randRow(),
     sh:            7,
     c:             coinValue.toFixed(2),
     sver:          '5',
@@ -220,17 +200,17 @@ function buildFSEndResponse(sess, coinValue, params, bl) {
     l:             '20',
     s:             grid.join(','),
     w:             '0',
-    'fs_bought':   sess.fsMaxSpin,
     fs:            sess.fsCurrentSpin,
-    st:            'rect',
     sw:            7,
+    st:            'rect',
     fsmul:         '1',
     fsmul_total:   '1',
-    fswin_total:   tw.toFixed(2),
+    fswin_total:   '0.00',
     fs_total:      sess.fsMaxSpin,
     fsres_total:   '0.00',
-    puri:          sess.isSuperFS ? '0' : '1',
-    trail:         'pmp~',
+    puri:          sess.isSuperFS ? '1' : '0',
+    trail:         rng.buildTrail(sess.hitCounts),
+    ...slmFields
   });
 
   sess.lastTotalWin  = tw;
@@ -240,10 +220,10 @@ function buildFSEndResponse(sess, coinValue, params, bl) {
   sess.fsTotalWin    = 0;
   sess.hitCounts     = new Array(GRID_SIZE).fill(0);
   sess.hitCountsInitialized = false;
+  sess.retriggered   = false;
   return resp;
 }
 
-// ── doCollect ─────────────────────────────────────────────────────────────────
 async function handleCollect(sess) {
   const win = sess.lastTotalWin || 0;
   if (win > 0) {
@@ -251,10 +231,9 @@ async function handleCollect(sess) {
     sess.balance = newBalance;
   }
   sess.lastTotalWin = 0;
-  return doCollectRNG(sess.balance, sess.index, win);
+  return rng.doCollectRNG(sess.balance, sess.index);
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function getField(str, field) {
   const m = str.match(new RegExp(`(?:^|&)${field}=([^&]*)`));
   return m ? m[1] : null;
@@ -264,11 +243,6 @@ function patchBalance(str, balance) {
   return str
     .replace(/balance=[^&]*/g,      `balance=${fmt(balance)}`)
     .replace(/balance_cash=[^&]*/g, `balance_cash=${fmt(balance)}`);
-}
-
-function randRow() {
-  const syms = [3,4,5,6,7,8,9];
-  return Array.from({ length: 7 }, () => syms[Math.floor(Math.random() * syms.length)]).join(',');
 }
 
 module.exports = { handle };

@@ -1,21 +1,12 @@
 'use strict';
 
-// ── Sugar Rush 1000 RNG Engine ─────────────────────────────────────────────────
-// Grid: 7 cols × 7 rows = 49 positions — col-major: pos = col*7 + row
-// Symbols: 1=scatter, 3-9=fruits (no wild/bomb)
-// Mechanics: Cluster Pays (min 5), Tumbling, Multiplier Spots
-// FS trigger: 3=10, 4=12, 5=15, 6=20, 7=30 spins
-// Multiplier Spots: 1st hit marks spot, 2nd hit=2x, doubles per hit, max 1024x
-// Super FS: all spots start at 2x
-
 const COLS      = 7;
 const ROWS      = 7;
-const GRID_SIZE = COLS * ROWS; // 49
+const GRID_SIZE = COLS * ROWS;
 const SCATTER   = 1;
 const MIN_CLUSTER = 5;
 const MAX_MUL   = 1024;
 
-// ── Reel Set (extracted from real Pragmatic doInit) ──────────────────────────
 const REEL_SET = [
   [9,9,6,6,5,9,7,7,7,5,8,8,8,7,9,5,5,6,4,9,9,7,8,8,1,3,3,4,3,3,3,9,9,9,6,6,7,9,9,5,5,4,5,5,9,7,8,5,5,5,5,6,4,9,9,4,8,8,6,9,9,1,7,6,6,8,8,9,9,9,9,5,8,4,8,8,3,8,8,6,6,8,8,8,5,5,6,4],
   [4,4,7,7,8,8,8,7,8,8,9,9,5,5,8,8,1,5,5,3,9,9,9,7,3,3,4,4,7,7,9,9,9,8,8,7,8,4,5,3,3,5,5,4,7,7,5,3,7,8,8,8,8,5,5,8,8,1,9,7,9,9,7,8,8,7,3,3,8,8,8,7,8,8,8,8,5,9,9,9,6,8,8,8,6,3,3,6,7,7,4,4,4,4,7],
@@ -26,10 +17,6 @@ const REEL_SET = [
   [8,8,6,6,6,7,4,4,4,4,9,9,9,9,5,5,5,1,7,4,6,9,9,4,9,9,7,7,4,4,3,3,9,9,7,7,9,7,7,3,9,8,8,9,9,9,6,6,7,7,6,4,4,6,6,4,9,9,9,9,9,9,1,7,4,4,5,5,8,8,6,6,8,8,5,5,4,4,8,8,8,8,8,8,8,8,9,9,4,4,7,4,4],
 ];
 
-// ── Paytable ──────────────────────────────────────────────────────────────────
-// Stored reverse (count 49 → 1, index 0 → 48)
-// win = PAYTABLE[sym][49 - count] * coinValue
-// (validated: sym=8 count=7 → PAYTABLE[8][42]=8 → 8*0.10=0.80 ✓)
 const PAYTABLE_RAW = {
   3: [3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,3000,1400,700,300,150,100,50,40,35,30,20,0,0,0,0],
   4: [2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,2000,1200,600,250,120,80,40,30,25,20,15,0,0,0,0],
@@ -40,12 +27,10 @@ const PAYTABLE_RAW = {
   9: [400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,200,100,50,30,20,10,8,6,5,4,0,0,0,0],
 };
 
-// ── FS trigger table ──────────────────────────────────────────────────────────
 const FS_AWARDS = { 3: 10, 4: 12, 5: 15, 6: 20, 7: 30 };
 
 function rnd(max) { return Math.floor(Math.random() * max); }
 
-// ── Spin grid from reel set ───────────────────────────────────────────────────
 function spinGrid() {
   const grid = new Array(GRID_SIZE);
   for (let col = 0; col < COLS; col++) {
@@ -67,7 +52,6 @@ function spinGridWithScatters(minScatters) {
   return grid;
 }
 
-// ── Cluster detection (BFS) ───────────────────────────────────────────────────
 function getNeighbors(pos) {
   const col = Math.floor(pos / ROWS);
   const row = pos % ROWS;
@@ -103,23 +87,11 @@ function findClusters(grid) {
   return clusters;
 }
 
-// ── Multiplier spots helpers ──────────────────────────────────────────────────
-// mpSpots: array of 49 values, each = current multiplier (0=unmarked, 1=no mul, 2=2x, 4=4x...)
-// 0 means "hit once but not yet 2x", 1 means "no effect", ≥2 means active multiplier
-// Actually: we track hit counts separately for clarity:
-//   hitCount[pos] = 0 → never hit (multiplier = 1, no effect on win)
-//   hitCount[pos] = 1 → hit once (multiplier stays 1 but spot is marked)
-//   hitCount[pos] = 2 → hit twice (multiplier = 2)
-//   hitCount[pos] = n → multiplier = 2^(n-1)
-// slm_mv sends actual multiplier: hitCount=0 or 1 → 1, hitCount=2 → 2, hitCount=3 → 4 etc.
-
 function hitCountToMul(hc) {
   if (hc <= 1) return 1;
   return Math.min(Math.pow(2, hc - 1), MAX_MUL);
 }
 
-// Cluster effective multiplier = sum of active multipliers of positions in cluster
-// (per rules: "if more multipliers are involved in the same winning combination, they add to each other")
 function clusterMul(cluster, hitCounts) {
   let sum = 0;
   let hasActive = false;
@@ -130,29 +102,33 @@ function clusterMul(cluster, hitCounts) {
   return hasActive ? sum : 1;
 }
 
-// Build slm_mp and slm_mv arrays (49 positions)
 function buildSlm(hitCounts) {
-  const mp = Array.from({ length: GRID_SIZE }, (_, i) => i);
-  const mv = hitCounts.map(hc => hitCountToMul(hc));
+  const mp = [];
+  const mv = [];
+  for (let i = 0; i < GRID_SIZE; i++) {
+    if (hitCounts[i] >= 2) {
+      mp.push(i);
+      mv.push(hitCountToMul(hitCounts[i]));
+    }
+  }
+  if (mp.length === 0) return {};
   return { slm_mp: mp.join(','), slm_mv: mv.join(',') };
 }
 
-// Update hit counts after symbols removed at positions
 function updateHitCounts(hitCounts, positions) {
   const updated = hitCounts.slice();
   for (const pos of positions) {
-    updated[pos] = Math.min(updated[pos] + 1, 11); // 2^10 = 1024 max
+    updated[pos] = Math.min(updated[pos] + 1, 11);
   }
   return updated;
 }
 
-// ── Win calculation ───────────────────────────────────────────────────────────
 function calcWin(clusters, coinValue, hitCounts) {
   let total = 0;
   for (const c of clusters) {
     const row = PAYTABLE_RAW[c.sym];
     if (!row) continue;
-    const idx = GRID_SIZE - c.positions.length; // 49 - count
+    const idx = GRID_SIZE - c.positions.length;
     if (idx < 0 || idx >= row.length) continue;
     const base = row[idx] || 0;
     if (base === 0) continue;
@@ -162,7 +138,6 @@ function calcWin(clusters, coinValue, hitCounts) {
   return total;
 }
 
-// ── Tumble: remove clusters, drop, refill ────────────────────────────────────
 function applyTumble(grid, clusters) {
   const toRemove = new Set();
   for (const c of clusters) c.positions.forEach(p => toRemove.add(p));
@@ -181,7 +156,6 @@ function applyTumble(grid, clusters) {
       if (idx < remaining.length) {
         newGrid[pos] = remaining[idx];
       } else {
-        // Refill: random symbol from reel, no scatter
         let sym;
         do { sym = reel[rnd(reel.length)]; } while (sym === SCATTER);
         newGrid[pos] = sym;
@@ -191,8 +165,6 @@ function applyTumble(grid, clusters) {
   return newGrid;
 }
 
-// ── s_mark builder ────────────────────────────────────────────────────────────
-// Format: tmb~sym:pos,sym:pos,...
 function buildSMark(clusters) {
   const parts = [];
   for (const c of clusters) {
@@ -201,17 +173,17 @@ function buildSMark(clusters) {
   return `tmb~${parts.join(',')}`;
 }
 
-// ── trail=pmp~pos1,pos2,... for base game ────────────────────────────────────
 function buildTrail(hitCounts) {
   const active = hitCounts
-    .map((hc, i) => hc >= 2 ? i : -1)
+    .map((hc, i) => hc === 1 ? i : -1)
     .filter(i => i >= 0);
   return `pmp~${active.join(',')}`;
 }
 
-// ── Win lines builder ─────────────────────────────────────────────────────────
 function buildWinLines(clusters, coinValue, hitCounts) {
   const lines = {};
+  const lmi = [];
+  const lmv = [];
   let idx = 0;
   for (const c of clusters) {
     const row = PAYTABLE_RAW[c.sym];
@@ -219,15 +191,24 @@ function buildWinLines(clusters, coinValue, hitCounts) {
     const rowIdx = GRID_SIZE - c.positions.length;
     const base = row[rowIdx] || 0;
     if (base === 0) continue;
+    
     const mul = clusterMul(c.positions, hitCounts);
     const win = base * coinValue * mul;
     lines[`l${idx}`] = `0~${win.toFixed(2)}~${c.positions.join('~')}`;
+    
+    if (mul > 1) {
+      lmi.push(idx);
+      lmv.push(mul);
+    }
     idx++;
+  }
+  if (lmi.length > 0) {
+    lines.lmi = lmi.join(',');
+    lines.lmv = lmv.join(',');
   }
   return lines;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt(n) {
   return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -248,11 +229,6 @@ function countScatters(grid) {
   return grid.filter(s => s === SCATTER).length;
 }
 
-// ── doSpinRNG — returns array of response strings ─────────────────────────────
-// isFreeSpins: bool — FS mode (multipliers persist)
-// hitCounts: array[49] — current multiplier hit counts (mutated in-place via returned value)
-// initHitCounts: for Super FS, all positions start with hitCount=2 (2x)
-// Returns { responses: string[], hitCounts: number[] }
 function doSpinRNG(params, sess) {
   const coinValue  = parseFloat(params.c || '0.20');
   const pur        = params.pur !== undefined ? parseInt(params.pur) : -1;
@@ -260,19 +236,14 @@ function doSpinRNG(params, sess) {
   const index      = sess.index || 1;
   const counter    = index * 2;
 
-  // Initial grid
   let grid = (pur === 0 || pur === 1)
-    ? spinGridWithScatters(3) // buy feature: guarantee scatter trigger
+    ? spinGridWithScatters(3)
     : spinGrid();
 
-  // Multiplier spot state for this spin
-  // In FS: use persistent hitCounts from session. In base: start fresh.
   let hitCounts = isFreeSpins
     ? (sess.hitCounts || new Array(GRID_SIZE).fill(0))
     : new Array(GRID_SIZE).fill(0);
 
-  // Super FS: all positions start at 2x (hitCount=2 = 2x on first hit effect)
-  // The Super FS starts with 2x on all spots already
   if (sess.isSuperFS && isFreeSpins && !sess.hitCountsInitialized) {
     hitCounts = new Array(GRID_SIZE).fill(2);
     sess.hitCountsInitialized = true;
@@ -280,53 +251,51 @@ function doSpinRNG(params, sess) {
   }
 
   const responses  = [];
-  let totalWin     = 0;
+  let spinTotalWin = 0;
+  let totalWin     = isFreeSpins ? (sess.fsTotalWin || 0) : 0;
   let cascadeStep  = 0;
+  let fsmore       = 0;
 
-  // ── Tumbling loop ─────────────────────────────────────────────────────────
   while (true) {
     const clusters = findClusters(grid);
 
     if (clusters.length === 0) {
+      const sc = countScatters(grid);
+      if (sc >= 3 && isFreeSpins) {
+        fsmore = FS_AWARDS[Math.min(sc, 7)] || 0;
+        sess.fsMaxSpin += fsmore;
+        sess.retriggered = true;
+      }
+
       if (cascadeStep === 0) {
-        // Zero-win spin: single response
-        const sc = countScatters(grid);
-        const r  = buildBaseResponse(grid, 0, coinValue, index, counter, sess, pur, hitCounts, sc);
+        const r  = buildBaseResponse(grid, totalWin, coinValue, index, counter, sess, pur, hitCounts, fsmore);
         return { responses: [r], hitCounts };
       }
-      // End of cascade: rs_t=1 finalizer
-      responses.push(buildEndResponse(grid, totalWin, coinValue, index, counter, sess, hitCounts, pur));
+      responses.push(buildEndResponse(grid, totalWin, spinTotalWin, coinValue, index, counter, sess, hitCounts, pur, fsmore));
       break;
     }
 
-    // All positions hit by winning symbols this step
     const allHitPositions = clusters.flatMap(c => c.positions);
-
-    // Compute win BEFORE updating hit counts (current state applies to this win)
     const stepWin = calcWin(clusters, coinValue, hitCounts);
+    spinTotalWin += stepWin;
     totalWin += stepWin;
 
-    // Build fields for this cascade step
     const sMark    = buildSMark(clusters);
     const winLines = buildWinLines(clusters, coinValue, hitCounts);
 
-    // Update hit counts for positions that were hit
     hitCounts = updateHitCounts(hitCounts, allHitPositions);
 
-    // Apply tumble
     const nextGrid = applyTumble(grid, clusters);
     cascadeStep++;
 
-    // Build cascade step response
     responses.push(buildCascadeStepResponse({
-      nextGrid, sMark, winLines, stepWin, totalWin,
+      nextGrid, sMark, winLines, stepWin, spinTotalWin, totalWin,
       coinValue, index, counter, sess, pur, cascadeStep, hitCounts,
     }));
 
     grid = nextGrid;
   }
 
-  // Update session hitCounts if in FS mode
   if (isFreeSpins) {
     sess.hitCounts = hitCounts;
   }
@@ -334,8 +303,7 @@ function doSpinRNG(params, sess) {
   return { responses, hitCounts };
 }
 
-// ── Response builders ─────────────────────────────────────────────────────────
-function buildBaseResponse(grid, totalWin, coinValue, index, counter, sess, pur, hitCounts, scatters) {
+function buildBaseResponse(grid, totalWin, coinValue, index, counter, sess, pur, hitCounts, fsmore) {
   const obj = {
     tw:            totalWin.toFixed(2),
     balance:       fmt(sess.balance),
@@ -356,17 +324,16 @@ function buildBaseResponse(grid, totalWin, coinValue, index, counter, sess, pur,
     w:             '0',
     sw:            COLS,
     st:            'rect',
-    trail:         'pmp~',
-    ntp:           '0.00',
+    trail:         buildTrail(hitCounts),
   };
 
-  if (sess.isFreeSpins) addFSFields(obj, sess, hitCounts);
+  if (sess.isFreeSpins) addFSFields(obj, sess, hitCounts, fsmore, pur);
   if (pur >= 0) { obj.puri = pur; obj.purtr = '1'; }
 
   return serialize(obj);
 }
 
-function buildCascadeStepResponse({ nextGrid, sMark, winLines, stepWin, totalWin, coinValue, index, counter, sess, pur, cascadeStep, hitCounts }) {
+function buildCascadeStepResponse({ nextGrid, sMark, winLines, stepWin, spinTotalWin, totalWin, coinValue, index, counter, sess, pur, cascadeStep, hitCounts }) {
   const obj = {
     s_mark:        sMark,
     tw:            totalWin.toFixed(2),
@@ -375,7 +342,7 @@ function buildCascadeStepResponse({ nextGrid, sMark, winLines, stepWin, totalWin
     balance_cash:  fmt(sess.balance),
     balance_bonus: '0.00',
     na:            's',
-    tmb_win:       stepWin.toFixed(2),
+    tmb_win:       spinTotalWin.toFixed(2),
     rs_p:          '0',
     stime:         Date.now(),
     sa:            randRow(),
@@ -388,29 +355,29 @@ function buildCascadeStepResponse({ nextGrid, sMark, winLines, stepWin, totalWin
     counter,
     l:             '20',
     s:             nextGrid.join(','),
-    w:             stepWin.toFixed(2),
+    w:             Number(stepWin.toFixed(2)),
     sw:            COLS,
     st:            'rect',
     trail:         buildTrail(hitCounts),
     ...winLines,
   };
 
-  if (sess.isFreeSpins) addFSFields(obj, sess, hitCounts);
+  if (sess.isFreeSpins) addFSFields(obj, sess, hitCounts, 0, pur);
   if (pur >= 0) { obj.puri = pur; obj.purtr = '1'; }
 
   return serialize(obj);
 }
 
-function buildEndResponse(grid, totalWin, coinValue, index, counter, sess, hitCounts, pur) {
+function buildEndResponse(grid, totalWin, spinTotalWin, coinValue, index, counter, sess, hitCounts, pur, fsmore) {
   const obj = {
     tw:            totalWin.toFixed(2),
     balance:       fmt(sess.balance),
     index,
     balance_cash:  fmt(sess.balance),
     balance_bonus: '0.00',
-    na:            'c',
+    na:            (spinTotalWin > 0 && !sess.isFreeSpins) ? 'c' : 's',
     rs_t:          '1',
-    tmb_win:       totalWin.toFixed(2),
+    tmb_win:       spinTotalWin.toFixed(2),
     stime:         Date.now(),
     sa:            randRow(),
     sb:            randRow(),
@@ -426,28 +393,32 @@ function buildEndResponse(grid, totalWin, coinValue, index, counter, sess, hitCo
     trail:         buildTrail(hitCounts),
   };
 
-  if (sess.isFreeSpins) addFSFields(obj, sess, hitCounts);
+  if (sess.isFreeSpins) addFSFields(obj, sess, hitCounts, fsmore, pur);
   if (pur >= 0) { obj.puri = pur; obj.purtr = '1'; }
 
   return serialize(obj);
 }
 
-function addFSFields(obj, sess, hitCounts) {
+function addFSFields(obj, sess, hitCounts, fsmore, pur) {
   obj.fs          = sess.fsCurrentSpin;
   obj.fsmax       = sess.fsMaxSpin;
-  obj['fs_bought']= sess.fsMaxSpin;
-  obj.fswin       = (sess.fsTotalWin || 0).toFixed(2);
+  if (fsmore > 0) obj.fsmore = fsmore;
+  if (sess.fsCurrentSpin === 1 && pur >= 0) {
+      obj.fs_bought = sess.fsMaxSpin;
+  }
+  obj.fswin       = '0';
   obj.fsmul       = '1';
   obj.fsres       = '0';
-  obj.puri        = sess.isSuperFS ? '0' : '1'; // puri=1=normal FS, puri=0=super FS
+  obj.puri        = sess.isSuperFS ? '1' : '0';
   if (hitCounts) {
-    const { slm_mp, slm_mv } = buildSlm(hitCounts);
-    obj.slm_mp = slm_mp;
-    obj.slm_mv = slm_mv;
+    const slm = buildSlm(hitCounts);
+    if (slm.slm_mp !== undefined) {
+      obj.slm_mp = slm.slm_mp;
+      obj.slm_mv = slm.slm_mv;
+    }
   }
 }
 
-// ── doInitRNG ─────────────────────────────────────────────────────────────────
 function doInitRNG(balance) {
   const defGrid = spinGrid();
   const reel0   = REEL_SET.map(r => r.join(',')).join('~');
@@ -495,44 +466,34 @@ function doInitRNG(balance) {
   });
 }
 
-// Build paytable string matching protocol format (11 rows, sep by ';')
 const PAYTABLE_STR = (() => {
   const rows = [];
-  // sym 0: 0
   rows.push('0');
-  // sym 1 (scatter): 49 zeros
   rows.push(new Array(49).fill(0).join(','));
-  // sym 2: 0
   rows.push('0');
-  // sym 3-9
   for (let sym = 3; sym <= 9; sym++) {
     rows.push(PAYTABLE_RAW[sym].join(','));
   }
-  // sym 10, 11: 0
   rows.push('0');
   rows.push('0');
   return rows.join(';');
 })();
 
-// ── doCollectRNG ──────────────────────────────────────────────────────────────
-function doCollectRNG(balance, index, totalWin) {
+function doCollectRNG(balance, index) {
   return serialize({
-    balance:       fmt(balance),
     index,
+    counter:       index * 2,
+    balance:       fmt(balance),
     balance_cash:  fmt(balance),
     balance_bonus: '0.00',
     na:            's',
     sver:          '5',
     stime:         Date.now(),
-    counter:       index * 2,
-    a:             '0',
-    gs:            '0',
-    w:             totalWin.toFixed(2),
-    tw:            totalWin.toFixed(2),
   });
 }
 
 module.exports = {
   doSpinRNG, doInitRNG, doCollectRNG,
   fmt, serialize, SCATTER, FS_AWARDS, GRID_SIZE,
+  buildSlm, buildTrail, randRow
 };
