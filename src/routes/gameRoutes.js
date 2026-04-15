@@ -25,7 +25,7 @@ const SYMBOL_TO_FOLDER = {
   vs20sugarrushx: 'sr',
 };
 
-app.use('/gs2c_/gameService', (req, res, next) => {
+router.use('/gs2c_/gameService', (req, res, next) => {
   // Tenta pegar o nome do jogo do referer se não vier na URL
   const referer = req.headers.referer || '';
   const match = referer.match(/\/slots\/([^\/]+)/);
